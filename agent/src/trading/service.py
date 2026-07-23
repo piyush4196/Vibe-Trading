@@ -22,6 +22,7 @@ _SDK_CONNECTOR_MODULES = {
     "futu": "src.trading.connectors.futu.sdk",
     "dhan": "src.trading.connectors.dhan.sdk",
     "shoonya": "src.trading.connectors.shoonya.sdk",
+    "upstox": "src.trading.connectors.upstox.sdk",
     "trading212": "src.trading.connectors.trading212.sdk",
     "mt5": "src.trading.connectors.mt5.sdk",
 }

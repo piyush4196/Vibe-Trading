@@ -1,10 +1,10 @@
-"""India broker data bridge: feed Shoonya / Dhan history into the backtest layer.
+"""India broker data bridge: feed Upstox / Shoonya / Dhan history into backtests.
 
-The Shoonya (Finvasia) and Dhan connectors already expose live-account market
-data via ``get_historical_bars`` (read path). This loader adapts that envelope
-into the standard OHLCV frame so a user's *broker* history can back the same
-backtests as the public Yahoo feed — useful when matching a live account exactly
-or pulling symbols Yahoo lacks.
+The Upstox, Shoonya (Finvasia), and Dhan connectors already expose live-account
+market data via ``get_historical_bars`` (read path). This loader adapts that
+envelope into the standard OHLCV frame so a user's *broker* history can back the
+same backtests as the public Yahoo feed — useful when matching a live account
+exactly or pulling symbols Yahoo lacks.
 
 It is an OPT-IN source (``requires_auth``): ``is_available`` is True only when a
 broker SDK is importable AND a broker is configured, so it trails Yahoo/yfinance
@@ -12,12 +12,14 @@ in the ``india_equity`` fallback chain and never fires in CI / unconfigured runs
 
 Symbol convention: project ``RELIANCE.NS`` / ``500325.BO`` → broker ``RELIANCE``
 on exchange ``NSE`` / ``BSE`` (the suffix selects the exchange; the base symbol
-is passed bare).
+is passed bare). Upstox also accepts index/commodity/currency aliases
+(``NIFTY``, ``GOLD``, ``USDINR``) and full ``instrument_key`` values.
 
 Limitation: broker endpoints return a bounded window of *recent* bars (period +
 limit), not an arbitrary historical start. This loader requests enough bars to
 cover the window and clips to ``[start_date, end_date]``; very old ranges may
-come back short. For deep history prefer Yahoo.
+come back short. For deep history prefer Yahoo (or Upstox daily/weekly which
+goes back further).
 """
 
 from __future__ import annotations
@@ -37,28 +39,44 @@ _OUTPUT_COLUMNS = ["open", "high", "low", "close", "volume"]
 _PERIOD_MAP = {"1D": "1d", "1H": "1h", "5m": "5m", "15m": "15m", "30m": "30m", "1m": "1m"}
 
 
+def _broker_ready(sdk) -> bool:
+    """True when the SDK reports itself available *and* has credentials."""
+    try:
+        if hasattr(sdk, "upstox_configured"):
+            return bool(sdk.upstox_available() and sdk.upstox_configured())
+        if hasattr(sdk, "shoonya_available") and sdk.shoonya_available():
+            missing = sdk._missing_fields(sdk.load_config())
+            return not missing
+        if hasattr(sdk, "dhan_available") and sdk.dhan_available():
+            missing = sdk._missing_fields(sdk.load_config())
+            return not missing
+    except Exception:  # noqa: BLE001 — treat as unavailable
+        return False
+    return False
+
+
 def _resolve_broker():
     """Return ``(broker_key, sdk_module)`` for the first available India broker.
 
-    Prefers Shoonya, then Dhan. Returns ``(None, None)`` when neither the SDK
-    nor a config is present. Import is deferred and defensive so a missing
-    ``src.trading`` package or broker SDK simply means "unavailable", never a
-    crash in the loader registry.
+    Prefers Upstox, then Shoonya, then Dhan — only when credentials are present.
+    Returns ``(None, None)`` when no configured broker is ready. Import is
+    deferred and defensive so a missing ``src.trading`` package or broker SDK
+    simply means "unavailable", never a crash in the loader registry.
     """
-    try:
-        from src.trading.connectors.shoonya import sdk as shoonya_sdk
+    candidates = (
+        ("upstox", "src.trading.connectors.upstox.sdk"),
+        ("shoonya", "src.trading.connectors.shoonya.sdk"),
+        ("dhan", "src.trading.connectors.dhan.sdk"),
+    )
+    for key, module_path in candidates:
+        try:
+            import importlib
 
-        if shoonya_sdk.shoonya_available():
-            return "shoonya", shoonya_sdk
-    except Exception as exc:  # noqa: BLE001 — optional dependency / config
-        logger.debug("shoonya bridge unavailable: %s", exc)
-    try:
-        from src.trading.connectors.dhan import sdk as dhan_sdk
-
-        if dhan_sdk.dhan_available():
-            return "dhan", dhan_sdk
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("dhan bridge unavailable: %s", exc)
+            sdk = importlib.import_module(module_path)
+            if _broker_ready(sdk):
+                return key, sdk
+        except Exception as exc:  # noqa: BLE001 — optional dependency / config
+            logger.debug("%s bridge unavailable: %s", key, exc)
     return None, None
 
 
@@ -107,7 +125,7 @@ def _bars_to_frame(bars: list[dict], start_date: str, end_date: str) -> Optional
 
 @register
 class DataLoader:
-    """Shoonya / Dhan history adapter for the ``india_equity`` market."""
+    """Upstox / Shoonya / Dhan history adapter for the ``india_equity`` market."""
 
     name = "india_broker"
     markets = {"india_equity"}

@@ -33,6 +33,8 @@ from src.trading.connectors.shoonya import sdk as sh
 from src.trading.connectors.shoonya.classification import SHOONYA_TOOL_CLASS
 from src.trading.connectors.tiger import sdk as tg
 from src.trading.connectors.tiger.classification import TIGER_TOOL_CLASS
+from src.trading.connectors.upstox import sdk as up
+from src.trading.connectors.upstox.classification import UPSTOX_TOOL_CLASS
 
 pytestmark = pytest.mark.unit
 
@@ -54,15 +56,17 @@ def test_sdk_profiles_registered() -> None:
         "futu-paper-sdk", "futu-live-sdk-readonly",
         "dhan-paper-sdk", "dhan-live-sdk-readonly",
         "shoonya-paper-sdk", "shoonya-live-sdk-readonly",
+        "upstox-paper-sdk", "upstox-live-sdk-readonly",
     } <= ids
 
 
 def test_no_discriminator_brokers_expose_no_live_trade_profile() -> None:
     """Brokers without a runtime paper/live discriminator (Longbridge, Dhan,
-    Shoonya) must NOT register any live order-placing profile — the Longbridge
-    precedent. A ``*-live-trade`` profile here would be a red-line regression."""
+    Shoonya, Upstox) must NOT register any live order-placing profile — the
+    Longbridge precedent. A ``*-live-trade`` profile here would be a red-line
+    regression."""
     ids = {p.id for p in profiles.list_profiles()}
-    for broker in ("longbridge", "dhan", "shoonya"):
+    for broker in ("longbridge", "dhan", "shoonya", "upstox"):
         assert f"{broker}-live-trade" not in ids
         # No live profile for these brokers may advertise an order capability.
         for p in profiles.list_profiles():
@@ -89,6 +93,8 @@ def test_no_discriminator_brokers_expose_no_live_trade_profile() -> None:
         ("dhan-live-sdk-readonly", "dhan", "live"),
         ("shoonya-paper-sdk", "shoonya", "paper"),
         ("shoonya-live-sdk-readonly", "shoonya", "live"),
+        ("upstox-paper-sdk", "upstox", "paper"),
+        ("upstox-live-sdk-readonly", "upstox", "live"),
     ],
 )
 def test_sdk_profiles_are_readonly_broker_sdk(profile_id, connector, environment) -> None:
@@ -577,6 +583,7 @@ def test_okx_invalid_profile_rejected() -> None:
         ("futu", "place_order"),
         ("dhan", "place_order"),
         ("shoonya", "place_order"),
+        ("upstox", "place_order"),
     ],
 )
 def test_order_ops_write_pinned_via_registry(broker, order_op) -> None:
@@ -693,7 +700,10 @@ def test_okx_history_maps_candles_and_period(monkeypatch) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("mod, Config", [(dh, dh.DhanConfig), (sh, sh.ShoonyaConfig)])
+@pytest.mark.parametrize(
+    "mod, Config",
+    [(dh, dh.DhanConfig), (sh, sh.ShoonyaConfig), (up, up.UpstoxConfig)],
+)
 @pytest.mark.parametrize("profile", ["live", "live-readonly"])
 def test_in_broker_place_order_refuses_non_paper(mod, Config, profile) -> None:
     """A non-paper config is refused before any SDK call (fail-closed)."""
@@ -702,14 +712,20 @@ def test_in_broker_place_order_refuses_non_paper(mod, Config, profile) -> None:
     assert "paper-only" in result["error"]
 
 
-@pytest.mark.parametrize("mod, Config", [(dh, dh.DhanConfig), (sh, sh.ShoonyaConfig)])
+@pytest.mark.parametrize(
+    "mod, Config",
+    [(dh, dh.DhanConfig), (sh, sh.ShoonyaConfig), (up, up.UpstoxConfig)],
+)
 def test_in_broker_cancel_order_refuses_non_paper(mod, Config) -> None:
     result = mod.cancel_order(Config(profile="live"), "ORD1")
     assert result["status"] == "error"
     assert "paper-only" in result["error"]
 
 
-@pytest.mark.parametrize("mod, Config", [(dh, dh.DhanConfig), (sh, sh.ShoonyaConfig)])
+@pytest.mark.parametrize(
+    "mod, Config",
+    [(dh, dh.DhanConfig), (sh, sh.ShoonyaConfig), (up, up.UpstoxConfig)],
+)
 def test_in_broker_paper_place_order_simulated_locally(mod, Config) -> None:
     """Paper config simulates locally — no real money, no SDK call."""
     result = mod.place_order(Config(profile="paper"), symbol="RELIANCE", side="buy", quantity=10)
@@ -719,7 +735,10 @@ def test_in_broker_paper_place_order_simulated_locally(mod, Config) -> None:
     assert result["paper_guard"] == "simulated_locally"
 
 
-@pytest.mark.parametrize("mod, Config", [(dh, dh.DhanConfig), (sh, sh.ShoonyaConfig)])
+@pytest.mark.parametrize(
+    "mod, Config",
+    [(dh, dh.DhanConfig), (sh, sh.ShoonyaConfig), (up, up.UpstoxConfig)],
+)
 def test_in_broker_paper_cancel_order_simulated(mod, Config) -> None:
     result = mod.cancel_order(Config(profile="paper"), "ORD1")
     assert result["status"] == "ok"
@@ -731,9 +750,12 @@ def test_in_broker_order_ops_classified_write() -> None:
     for name in ("place_order", "modify_order", "cancel_order"):
         assert DHAN_TOOL_CLASS[name] is ToolClass.WRITE
         assert SHOONYA_TOOL_CLASS[name] is ToolClass.WRITE
+        assert UPSTOX_TOOL_CLASS[name] is ToolClass.WRITE
     for name in ("get_positions", "get_holdings"):
         assert DHAN_TOOL_CLASS[name] is ToolClass.READ
         assert SHOONYA_TOOL_CLASS[name] is ToolClass.READ
+    assert UPSTOX_TOOL_CLASS["get_positions"] is ToolClass.READ
+    assert UPSTOX_TOOL_CLASS["get_holdings"] is ToolClass.READ
 
 
 def test_dhan_redacts_access_token() -> None:
@@ -754,6 +776,14 @@ def test_shoonya_redacts_secrets() -> None:
     assert pub["user_id"].endswith("***")
 
 
+def test_upstox_redacts_access_token() -> None:
+    cfg = up.UpstoxConfig(access_token="tok-abcdefgh-secret", api_secret="super-secret")
+    pub = up._public_config(cfg)
+    assert "super-secret" not in str(pub)
+    assert pub["access_token"].endswith("***")
+    assert pub["api_secret"] == "***redacted***"
+
+
 def test_dhan_invalid_profile_rejected() -> None:
     with pytest.raises(dh.DhanConfigError):
         dh.DhanConfig.from_mapping({"profile": "go-live"})
@@ -762,6 +792,11 @@ def test_dhan_invalid_profile_rejected() -> None:
 def test_shoonya_invalid_profile_rejected() -> None:
     with pytest.raises(sh.ShoonyaConfigError):
         sh.ShoonyaConfig.from_mapping({"profile": "go-live"})
+
+
+def test_upstox_invalid_profile_rejected() -> None:
+    with pytest.raises(up.UpstoxConfigError):
+        up.UpstoxConfig.from_mapping({"profile": "go-live"})
 
 
 def test_dhan_service_unconfigured(monkeypatch, tmp_path) -> None:
@@ -777,4 +812,12 @@ def test_shoonya_service_unconfigured(monkeypatch, tmp_path) -> None:
     result = service.check_connection("shoonya-paper-sdk")
     assert result["status"] == "error"
     assert result["connector"] == "shoonya"
+    assert result["transport"] == "broker_sdk"
+
+
+def test_upstox_service_unconfigured(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(up, "get_runtime_root", lambda: tmp_path)
+    result = service.check_connection("upstox-paper-sdk")
+    assert result["status"] == "error"
+    assert result["connector"] == "upstox"
     assert result["transport"] == "broker_sdk"
