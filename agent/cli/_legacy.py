@@ -4779,6 +4779,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from src.hypotheses.cli_handlers import add_subparser as _add_hypothesis_subparser
     _add_hypothesis_subparser(subparsers)
 
+    # Autonomous market watcher
+    from src.watcher.cli_handlers import add_subparser as _add_watch_subparser
+    _add_watch_subparser(subparsers)
+
     return parser
 
 
@@ -5654,6 +5658,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "hypothesis":
         from src.hypotheses.cli_handlers import dispatch as _hyp_dispatch
         return _coerce_exit_code(_hyp_dispatch(args))
+    if args.command == "watch":
+        from src.watcher.cli_handlers import dispatch as _watch_dispatch
+        return _coerce_exit_code(_watch_dispatch(args))
     if args.command == "connector":
         return _coerce_exit_code(_dispatch_connector(args))
     if args.command == "memory":
