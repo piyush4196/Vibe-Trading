@@ -14,6 +14,7 @@ from typing import Any
 
 from src.trading.connectors.upstox import sdk as upstox_sdk
 from src.watcher.antispam import should_emit
+from src.watcher.auto_trade import entry_succeeded, place_entry_order, place_exit_order
 from src.watcher.candles import CandleBuilder, TIMEFRAMES_MINUTES
 from src.watcher.config import WatcherConfig
 from src.watcher.decision import evaluate_instrument
@@ -22,7 +23,7 @@ from src.watcher.feed_ws import UpstoxWebSocketCollector
 from src.watcher.learning import LearningEngine
 from src.watcher.market_filter import build_market_context
 from src.watcher.market_hours import any_indian_market_open, seconds_until_next_open
-from src.watcher.models import Candle, MarketContext, Tick, WatchInstrument
+from src.watcher.models import Candle, MarketContext, OpenPosition, Tick, WatchInstrument
 from src.watcher.notify_telegram import TelegramNotifier
 from src.watcher.positions import PositionMonitor
 from src.watcher.storage import WatcherStore
@@ -73,6 +74,8 @@ class WatcherEngine:
             "signals": 0,
             "alerts_sent": 0,
             "alerts_suppressed": 0,
+            "orders_placed": 0,
+            "orders_failed": 0,
             "started_at": None,
         }
         self.positions = PositionMonitor(
@@ -80,6 +83,7 @@ class WatcherEngine:
             notify=lambda text: self.notifier.send_markdown(text),
             load_bars=self._load_bars,
             get_ltp=lambda key: self._ltp.get(key),
+            on_exit=self._on_position_exit,
         )
 
     # ------------------------------------------------------------------ API
@@ -141,6 +145,9 @@ class WatcherEngine:
                 "min_confidence": self.config.min_confidence,
                 "feed_mode": self.config.feed_mode,
                 "dry_run": self.config.dry_run,
+                "auto_trade_enabled": self.config.auto_trade_enabled,
+                "auto_trade_quantity": self.config.auto_trade_quantity,
+                "watch_only_symbols": self.config.watch_only_symbols,
             },
         }
 
@@ -286,15 +293,50 @@ class WatcherEngine:
             stop=signal.stop_loss,
             target=signal.target_1,
         )
-        self.positions.track_signal(signal)
+        trade = place_entry_order(signal, self.config)
+        auto_traded = entry_succeeded(trade)
+        if trade.get("status") == "error":
+            self.stats["orders_failed"] = int(self.stats.get("orders_failed") or 0) + 1
+        elif auto_traded:
+            self.stats["orders_placed"] = int(self.stats.get("orders_placed") or 0) + 1
+            self.notifier.send_markdown(
+                f"🧾 *Auto-trade entry*\n`{signal.side.value}` `{signal.instrument}` "
+                f"qty `{trade.get('quantity')}` conf `{signal.confidence:.0f}%`"
+            )
+
+        order_id = ""
+        if isinstance(trade.get("result"), dict):
+            order_id = str(trade["result"].get("order_id") or "")
+        self.positions.track_signal(
+            signal,
+            auto_traded=auto_traded,
+            quantity=float(trade.get("quantity") or self.config.auto_trade_quantity or 0),
+            order_id=order_id,
+        )
         self.stats["alerts_sent"] = int(self.stats.get("alerts_sent") or 0) + 1
         logger.info(
-            "ALERT %s %s conf=%.1f rr=1:%.1f telegram=%s",
+            "ALERT %s %s conf=%.1f rr=1:%.1f telegram=%s auto_trade=%s",
             signal.side.value,
             signal.instrument,
             signal.confidence,
             signal.risk_reward,
             result.get("status"),
+            trade.get("status"),
+        )
+
+    def _on_position_exit(self, pos: OpenPosition, reason: str) -> None:
+        if not self.config.auto_trade_on_exit:
+            return
+        trade = place_exit_order(pos, self.config, reason=reason)
+        if trade.get("status") == "skipped":
+            return
+        status = str(trade.get("status") or "").lower()
+        if status in ("error", "rejected", "unsupported"):
+            self.stats["orders_failed"] = int(self.stats.get("orders_failed") or 0) + 1
+            return
+        self.stats["orders_placed"] = int(self.stats.get("orders_placed") or 0) + 1
+        self.notifier.send_markdown(
+            f"🧾 *Auto-trade exit* (`{reason}`)\n`{pos.instrument}` qty `{trade.get('quantity')}`"
         )
 
     # ---------------------------------------------------------------- seed

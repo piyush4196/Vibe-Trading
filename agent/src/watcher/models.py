@@ -174,3 +174,6 @@ class OpenPosition:
     status: str = "open"
     peak_price: float = 0.0
     trough_price: float = 0.0
+    auto_traded: bool = False
+    quantity: float = 0.0
+    order_id: str = ""

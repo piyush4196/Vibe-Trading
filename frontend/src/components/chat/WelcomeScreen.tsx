@@ -1,5 +1,16 @@
 import { useTranslation } from "react-i18next";
-import { Bot, TrendingUp, Globe, Sparkles, Users, UserCircle2, NotebookPen, Landmark, Gem } from "lucide-react";
+import {
+  Bot,
+  TrendingUp,
+  Globe,
+  Sparkles,
+  Users,
+  UserCircle2,
+  NotebookPen,
+  Landmark,
+  Gem,
+  Radar,
+} from "lucide-react";
 
 interface Example {
   titleKey: string;
@@ -34,6 +45,43 @@ const CATEGORIES: Category[] = [
         titleKey: "welcome.examples.usTechMaxDiv",
         descKey: "welcome.examples.usTechMaxDivDesc",
         promptKey: "welcome.examples.usTechMaxDivPrompt",
+      },
+    ],
+  },
+  {
+    labelKey: "welcome.categories.indiaLiveDesk",
+    icon: <Radar className="h-4 w-4" />,
+    color: "text-rose-400 border-rose-500/30 hover:border-rose-500/60 hover:bg-rose-500/5",
+    examples: [
+      {
+        titleKey: "welcome.examples.reliancePaperBuy",
+        descKey: "welcome.examples.reliancePaperBuyDesc",
+        promptKey: "welcome.examples.reliancePaperBuyPrompt",
+      },
+      {
+        titleKey: "welcome.examples.niftyOptionsWatch",
+        descKey: "welcome.examples.niftyOptionsWatchDesc",
+        promptKey: "welcome.examples.niftyOptionsWatchPrompt",
+      },
+      {
+        titleKey: "welcome.examples.bankniftyIntraday",
+        descKey: "welcome.examples.bankniftyIntradayDesc",
+        promptKey: "welcome.examples.bankniftyIntradayPrompt",
+      },
+      {
+        titleKey: "welcome.examples.bankniftyOptionsWatch",
+        descKey: "welcome.examples.bankniftyOptionsWatchDesc",
+        promptKey: "welcome.examples.bankniftyOptionsWatchPrompt",
+      },
+      {
+        titleKey: "welcome.examples.hdfcBankOptions",
+        descKey: "welcome.examples.hdfcBankOptionsDesc",
+        promptKey: "welcome.examples.hdfcBankOptionsPrompt",
+      },
+      {
+        titleKey: "welcome.examples.indiaFnoWatcher",
+        descKey: "welcome.examples.indiaFnoWatcherDesc",
+        promptKey: "welcome.examples.indiaFnoWatcherPrompt",
       },
     ],
   },

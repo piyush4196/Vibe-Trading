@@ -7,6 +7,7 @@ from typing import Iterable
 
 from src.trading.connectors.upstox.instruments import (
     INDEX_ALIASES,
+    nearest_atm_option,
     resolve_instrument,
 )
 from src.watcher.config import WatcherConfig
@@ -63,18 +64,47 @@ _DEFAULT_FNO_STOCKS = [
 
 _MCX_ALIASES = ["GOLD", "SILVER", "CRUDEOIL"]
 _CURRENCY_ALIASES = ["USDINR", "EURINR", "GBPINR", "JPYINR"]
+_INDEX_OPTION_UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
 
 
 def build_universe(config: WatcherConfig) -> list[WatchInstrument]:
     """Resolve the live watchlist (capped by ``max_instruments``)."""
     out: list[WatchInstrument] = []
     seen: set[str] = set()
+    watch_only = [s.strip().upper() for s in (config.watch_only_symbols or []) if s and str(s).strip()]
 
     def _add(inst: WatchInstrument) -> None:
         if inst.instrument_key in seen:
             return
+        if len(out) >= config.max_instruments:
+            return
         seen.add(inst.instrument_key)
         out.append(inst)
+
+    # Narrow mode: only explicit symbols (+ optional ATM options for them).
+    if watch_only:
+        for sym in watch_only:
+            try:
+                row = resolve_instrument(
+                    f"{sym}.NS" if not sym.upper().endswith((".NS", ".BO")) else sym
+                )
+                _add(
+                    WatchInstrument(
+                        symbol=str(row.get("trading_symbol") or sym).upper(),
+                        instrument_key=str(row["instrument_key"]),
+                        market="NSE",
+                        segment=MarketSegment.EQUITY,
+                        name=str(row.get("name") or sym),
+                        lot_size=int(row.get("lot_size") or 1),
+                        tick_size=float(row.get("tick_size") or 0.05),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("skip watch_only equity %s: %s", sym, exc)
+        if config.include_stock_options or config.include_index_options:
+            for sym in watch_only:
+                _add_atm_options(sym, _add)
+        return out[: config.max_instruments]
 
     if config.include_indices:
         for symbol, key in _CORE_INDICES:
@@ -103,7 +133,9 @@ def build_universe(config: WatcherConfig) -> list[WatchInstrument]:
         if len(out) >= config.max_instruments:
             break
         try:
-            row = resolve_instrument(f"{sym}.NS" if not sym.upper().endswith((".NS", ".BO")) else sym)
+            row = resolve_instrument(
+                f"{sym}.NS" if not sym.upper().endswith((".NS", ".BO")) else sym
+            )
             _add(
                 WatchInstrument(
                     symbol=str(row.get("trading_symbol") or sym).upper(),
@@ -156,6 +188,14 @@ def build_universe(config: WatcherConfig) -> list[WatchInstrument]:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("skip stock fut %s: %s", sym, exc)
 
+    if config.include_index_options:
+        for und in _INDEX_OPTION_UNDERLYINGS:
+            _add_atm_options(und, _add)
+
+    if config.include_stock_options:
+        for sym in config.extra_symbols or _DEFAULT_FNO_STOCKS[:8]:
+            _add_atm_options(str(sym).upper(), _add)
+
     if config.include_mcx:
         for alias in _MCX_ALIASES:
             if len(out) >= config.max_instruments:
@@ -195,6 +235,26 @@ def build_universe(config: WatcherConfig) -> list[WatchInstrument]:
                 logger.debug("skip currency %s: %s", alias, exc)
 
     return out[: config.max_instruments]
+
+
+def _add_atm_options(underlying: str, add_fn) -> None:
+    """Add nearest-expiry ATM CE + PE for ``underlying`` when resolvable."""
+    for opt in ("CE", "PE"):
+        try:
+            row = nearest_atm_option(underlying, option_type=opt)
+            add_fn(
+                WatchInstrument(
+                    symbol=str(row.get("trading_symbol") or f"{underlying}-{opt}"),
+                    instrument_key=str(row["instrument_key"]),
+                    market="NSE",
+                    segment=MarketSegment.OPTION,
+                    name=str(row.get("name") or underlying),
+                    lot_size=int(row.get("lot_size") or 1),
+                    tick_size=float(row.get("tick_size") or 0.05),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("skip %s %s option: %s", underlying, opt, exc)
 
 
 def index_keys() -> dict[str, str]:

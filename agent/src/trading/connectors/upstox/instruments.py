@@ -363,6 +363,75 @@ def _lookup_trading_symbol(
     return hits[0]
 
 
+def nearest_atm_option(
+    asset: str,
+    *,
+    option_type: str,
+    spot: float | None = None,
+    segment: str = "NSE_FO",
+    rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Resolve nearest-expiry ATM CE/PE for an index or stock underlying.
+
+    ``option_type`` must be ``CE`` or ``PE``. When ``spot`` is omitted, the
+    median strike of the nearest expiry is used as a proxy ATM.
+    """
+    master = rows if rows is not None else load_instruments()
+    needle = str(asset or "").strip().upper().replace(" ", "")
+    if needle in ("NIFTY50",):
+        needle = "NIFTY"
+    elif needle in ("NIFTYBANK",):
+        needle = "BANKNIFTY"
+    opt = str(option_type or "").strip().upper()
+    if opt not in ("CE", "PE"):
+        raise UpstoxInstrumentError("option_type must be CE or PE")
+
+    now_ms = int(time.time() * 1000)
+    by_expiry: dict[int, list[dict[str, Any]]] = {}
+    for r in master:
+        if r.get("segment") != segment:
+            continue
+        if str(r.get("instrument_type") or "").upper() != opt:
+            continue
+        asset_sym = str(
+            r.get("asset_symbol") or r.get("underlying_symbol") or r.get("name") or ""
+        ).upper().replace(" ", "")
+        ts = str(r.get("trading_symbol") or "").upper().replace(" ", "")
+        if asset_sym != needle and not ts.startswith(needle):
+            continue
+        expiry = int(r.get("expiry") or 0)
+        if expiry and expiry < now_ms:
+            continue
+        by_expiry.setdefault(expiry or 2**63, []).append(r)
+
+    if not by_expiry:
+        raise UpstoxInstrumentError(f"no active {opt} options for '{asset}'")
+
+    nearest_exp = min(by_expiry)
+    chain = by_expiry[nearest_exp]
+    strikes: list[tuple[float, dict[str, Any]]] = []
+    for r in chain:
+        try:
+            strike = float(r.get("strike_price") or r.get("strike") or 0)
+        except (TypeError, ValueError):
+            continue
+        if strike <= 0:
+            continue
+        strikes.append((strike, r))
+    if not strikes:
+        raise UpstoxInstrumentError(f"no strikes for '{asset}' {opt}")
+
+    strikes.sort(key=lambda item: item[0])
+    if spot is None or float(spot) <= 0:
+        mid = strikes[len(strikes) // 2][0]
+        target = mid
+    else:
+        target = float(spot)
+
+    best = min(strikes, key=lambda item: abs(item[0] - target))
+    return best[1]
+
+
 def list_supported_aliases() -> dict[str, Iterable[str]]:
     """Return documented alias groups for CLI / docs surfaces."""
     return {

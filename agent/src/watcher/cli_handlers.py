@@ -16,16 +16,19 @@ from src.watcher.config import WatcherConfig
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "watch",
-        help="Autonomous Indian-market watcher (Upstox → high-probability Telegram alerts)",
+        help="Autonomous Indian-market watcher (Upstox → high-probability alerts + optional auto-trade)",
     )
     sub = parser.add_subparsers(dest="watch_command")
 
     start = sub.add_parser("start", help="Start the always-on market watcher")
-    start.add_argument("--dry-run", action="store_true", help="Log signals; skip Telegram")
+    start.add_argument("--dry-run", action="store_true", help="Log signals; skip Telegram / auto-trade")
     start.add_argument("--feed", choices=["auto", "poll", "websocket"], default=None)
     start.add_argument("--max-instruments", type=int, default=None)
     start.add_argument("--min-confidence", type=float, default=None)
     start.add_argument("--poll-interval", type=float, default=None)
+    start.add_argument("--auto-trade", action="store_true", help="Place orders when confidence ≥ threshold")
+    start.add_argument("--quantity", type=float, default=None, help="Auto-trade quantity (default 1)")
+    start.add_argument("--symbols", default=None, help="Comma-separated watch-only symbols (e.g. RELIANCE)")
     start.add_argument("--foreground", action="store_true", help="Run in foreground (default)")
     start.add_argument("-v", "--verbose", action="store_true")
 
@@ -35,12 +38,21 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     once = sub.add_parser("once", help="Single scan cycle then exit (for testing)")
     once.add_argument("--dry-run", action="store_true", default=True)
     once.add_argument("--max-instruments", type=int, default=30)
+    once.add_argument("--symbols", default=None, help="Comma-separated watch-only symbols")
     once.add_argument("-v", "--verbose", action="store_true")
 
     cfg = sub.add_parser("config", help="Show or write watcher config")
     cfg.add_argument("--set-telegram-token", default=None)
     cfg.add_argument("--set-telegram-chat-id", default=None)
     cfg.add_argument("--min-confidence", type=float, default=None)
+    cfg.add_argument("--enable-auto-trade", action="store_true")
+    cfg.add_argument("--disable-auto-trade", action="store_true")
+    cfg.add_argument("--quantity", type=float, default=None)
+    cfg.add_argument("--profile", default=None, help="Trading profile id (e.g. upstox-paper-trade)")
+    cfg.add_argument("--symbols", default=None, help="Comma-separated watch-only symbols")
+    cfg.add_argument("--auto-trade-symbols", default=None, help="Comma-separated symbols allowed to auto-trade")
+    cfg.add_argument("--include-stock-options", action="store_true")
+    cfg.add_argument("--include-index-options", action="store_true")
     cfg.add_argument("--print", action="store_true")
 
 
@@ -63,6 +75,12 @@ def dispatch(args: argparse.Namespace) -> int:
     return 2
 
 
+def _parse_symbols(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [part.strip().upper() for part in str(raw).split(",") if part.strip()]
+
+
 def _apply_overrides(config: WatcherConfig, args: argparse.Namespace) -> WatcherConfig:
     if getattr(args, "dry_run", False):
         config.dry_run = True
@@ -74,6 +92,15 @@ def _apply_overrides(config: WatcherConfig, args: argparse.Namespace) -> Watcher
         config.min_confidence = float(args.min_confidence)
     if getattr(args, "poll_interval", None):
         config.poll_interval_seconds = float(args.poll_interval)
+    if getattr(args, "auto_trade", False):
+        config.auto_trade_enabled = True
+    if getattr(args, "quantity", None) is not None:
+        config.auto_trade_quantity = float(args.quantity)
+    symbols = _parse_symbols(getattr(args, "symbols", None))
+    if symbols:
+        config.watch_only_symbols = symbols
+        if not config.auto_trade_symbols:
+            config.auto_trade_symbols = list(symbols)
     return config
 
 
@@ -87,7 +114,10 @@ def _cmd_start(args: argparse.Namespace) -> int:
 
     engine = WatcherEngine(config)
     print(
-        f"Starting watcher · feed={config.feed_mode} · min_confidence={config.min_confidence} · dry_run={config.dry_run}"
+        "Starting watcher · "
+        f"feed={config.feed_mode} · min_confidence={config.min_confidence} · "
+        f"dry_run={config.dry_run} · auto_trade={config.auto_trade_enabled} · "
+        f"qty={config.auto_trade_quantity} · symbols={config.watch_only_symbols or 'default'}"
     )
     try:
         engine.start(blocking=True)
@@ -125,7 +155,6 @@ def _cmd_once(args: argparse.Namespace) -> int:
 
 def _cmd_status() -> int:
     config = WatcherConfig.load()
-    from src.watcher.engine import WatcherEngine
     from src.watcher.learning import LearningEngine
     from src.watcher.storage import WatcherStore
 
@@ -149,6 +178,9 @@ def _cmd_status() -> int:
                 "state_dir": str(config.state_dir()),
                 "learning": learning.summary(),
                 "min_confidence": config.min_confidence,
+                "auto_trade_enabled": config.auto_trade_enabled,
+                "auto_trade_quantity": config.auto_trade_quantity,
+                "watch_only_symbols": config.watch_only_symbols,
                 "telegram_configured": bool(config.telegram_bot_token and config.telegram_chat_id),
             },
             indent=2,
@@ -188,6 +220,32 @@ def _cmd_config(args: argparse.Namespace) -> int:
         changed = True
     if args.min_confidence is not None:
         config.min_confidence = float(args.min_confidence)
+        changed = True
+    if getattr(args, "enable_auto_trade", False):
+        config.auto_trade_enabled = True
+        changed = True
+    if getattr(args, "disable_auto_trade", False):
+        config.auto_trade_enabled = False
+        changed = True
+    if getattr(args, "quantity", None) is not None:
+        config.auto_trade_quantity = float(args.quantity)
+        changed = True
+    if getattr(args, "profile", None):
+        config.auto_trade_profile_id = str(args.profile).strip()
+        changed = True
+    symbols = _parse_symbols(getattr(args, "symbols", None))
+    if symbols:
+        config.watch_only_symbols = symbols
+        changed = True
+    auto_syms = _parse_symbols(getattr(args, "auto_trade_symbols", None))
+    if auto_syms:
+        config.auto_trade_symbols = auto_syms
+        changed = True
+    if getattr(args, "include_stock_options", False):
+        config.include_stock_options = True
+        changed = True
+    if getattr(args, "include_index_options", False):
+        config.include_index_options = True
         changed = True
     if changed:
         path = config.save()

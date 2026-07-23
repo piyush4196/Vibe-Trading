@@ -80,6 +80,15 @@ function fallbackAuthorizeInstruction(): string {
   return "Run `vibe-trading connector list`, choose the broker profile, then run `vibe-trading connector authorize <profile>` from the desktop session that will hold the broker connection.";
 }
 
+function fallbackSdkConfigureInstruction(broker: string): string {
+  return `Configure credentials for ${broker} (Settings → Integrations, or ~/.vibe-trading/${broker}.json), then run \`vibe-trading connector use\` with a ${broker} profile and \`vibe-trading connector check\`.`;
+}
+
+/** True when the broker is usable: OAuth token cache OR broker_sdk connection_state. */
+export function isBrokerConnected(auth: LiveBrokerStatus["auth"]): boolean {
+  return auth.oauth_token_present || auth.connection_state === "connected";
+}
+
 function BrokerRow({
   broker,
   halted,
@@ -93,19 +102,30 @@ function BrokerRow({
   const [authorizeHint, setAuthorizeHint] = useState<LiveAuthorizeResponse | null>(null);
   const [authorizeFailed, setAuthorizeFailed] = useState(false);
   const brokerKey = broker.auth.broker;
-  const authorized = broker.auth.oauth_token_present;
+  const oauthAuthorized = broker.auth.oauth_token_present;
+  const connected = isBrokerConnected(broker.auth);
+  const sdkTransport = broker.auth.transport === "broker_sdk";
   const runnerAlive = broker.runner?.alive ?? false;
   const mandate = broker.mandate ?? null;
   const countdown = formatCountdown(mandate?.expires_at);
   const authorizeInstruction = authorizeHint?.instruction
-    ?? (authorizeFailed ? fallbackAuthorizeInstruction() : "Loading connector authorization instructions...");
-  const authorizeNote = "The connector channel stays read-only until OAuth succeeds and a mandate is committed.";
+    ?? (authorizeFailed
+      ? (sdkTransport ? fallbackSdkConfigureInstruction(brokerKey) : fallbackAuthorizeInstruction())
+      : "Loading connector authorization instructions...");
+  const authorizeNote = sdkTransport
+    ? "Broker SDK connectors use API credentials (not the live OAuth cache). Read/paper tools work once configured."
+    : "The connector channel stays read-only until OAuth succeeds and a mandate is committed.";
 
   useEffect(() => {
     let cancelled = false;
     setAuthorizeHint(null);
     setAuthorizeFailed(false);
-    if (authorized || !brokerKey) return () => { cancelled = true; };
+    if (connected || !brokerKey) return () => { cancelled = true; };
+    // broker_sdk uses configure/check — skip the live OAuth authorize endpoint.
+    if (sdkTransport) {
+      setAuthorizeFailed(true);
+      return () => { cancelled = true; };
+    }
 
     api.authorizeLive(brokerKey)
       .then((response) => {
@@ -116,7 +136,7 @@ function BrokerRow({
       });
 
     return () => { cancelled = true; };
-  }, [authorized, brokerKey]);
+  }, [connected, brokerKey, sdkTransport]);
 
   const toggleRunner = useCallback(async () => {
     if (busy) return;
@@ -142,10 +162,10 @@ function BrokerRow({
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-xs font-semibold capitalize text-foreground">{brokerKey}</span>
-          {authorized ? (
+          {connected ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
               <ShieldCheck className="h-2.5 w-2.5" />
-              Authorized
+              {oauthAuthorized ? "Authorized" : "Connected"}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -156,10 +176,9 @@ function BrokerRow({
         </div>
       </div>
 
-      {/* Connect-profile on-ramp for unauthorized brokers (C2). The OAuth bootstrap
-          is a desktop-only CLI step (SPEC §4 headless behavior), so the web surface
-          surfaces the discoverable instruction rather than driving the browser flow. */}
-      {!authorized ? (
+      {/* Connect-profile on-ramp when the broker is not ready yet. OAuth bootstrap
+          is desktop-only for MCP live brokers; broker_sdk uses configure/check. */}
+      {!connected ? (
         <div className="grid gap-1.5 rounded-md border border-dashed border-primary/30 bg-primary/5 p-2">
           <div className="flex items-center gap-1.5 text-[11px] font-medium text-primary">
             <PlugZap className="h-3 w-3 shrink-0" />
@@ -174,7 +193,7 @@ function BrokerRow({
             </p>
           )}
         </div>
-      ) : (
+      ) : oauthAuthorized ? (
         <>
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-md border bg-background/60 p-2">
@@ -259,6 +278,14 @@ function BrokerRow({
             </button>
           </div>
         </>
+      ) : (
+        <div className="rounded-md border bg-background/60 p-2 text-[10px] leading-relaxed text-muted-foreground">
+          Broker credentials are ready. Use{" "}
+          <span className="font-mono text-foreground">vibe-trading connector use</span>
+          {" / "}
+          <span className="font-mono text-foreground">connector check</span>
+          {" "}for account, positions, and quotes. Persistent live runners apply to OAuth brokers only.
+        </div>
       )}
     </div>
   );
@@ -290,9 +317,7 @@ export const RunnerStatus = memo(function RunnerStatus({ status, unavailable, ha
 
   const isHalted = halted ?? status.global_halted;
   const anyRunning = visibleBrokers.some((b) => b.runner?.alive);
-  const authorizedCount = visibleBrokers.filter(
-    (b) => b.auth.oauth_token_present || b.auth.connection_state === "connected"
-  ).length;
+  const authorizedCount = visibleBrokers.filter((b) => isBrokerConnected(b.auth)).length;
 
   return (
     <div className="grid gap-2">

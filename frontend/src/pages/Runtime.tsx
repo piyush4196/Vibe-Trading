@@ -161,7 +161,13 @@ export function Runtime() {
               </section>
             ) : (
               <section className="grid gap-4">
-                {status.brokers.map((broker) => (
+                {[...status.brokers]
+                  .sort((a, b) => {
+                    const aUp = a.auth.broker === "upstox" ? 0 : 1;
+                    const bUp = b.auth.broker === "upstox" ? 0 : 1;
+                    return aUp - bUp;
+                  })
+                  .map((broker) => (
                   <BrokerRuntimeCard
                     key={broker.auth.profile_id || broker.auth.broker}
                     broker={broker}

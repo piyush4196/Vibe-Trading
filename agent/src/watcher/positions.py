@@ -20,13 +20,22 @@ class PositionMonitor:
         notify: Callable[[str], None],
         load_bars: Callable[[str, str], list[dict]],
         get_ltp: Callable[[str], float | None],
+        on_exit: Callable[[OpenPosition, str], None] | None = None,
     ):
         self.store = store
         self.notify = notify
         self.load_bars = load_bars
         self.get_ltp = get_ltp
+        self.on_exit = on_exit
 
-    def track_signal(self, signal: Signal) -> OpenPosition:
+    def track_signal(
+        self,
+        signal: Signal,
+        *,
+        auto_traded: bool = False,
+        quantity: float = 0.0,
+        order_id: str = "",
+    ) -> OpenPosition:
         pos = OpenPosition(
             signal_id=signal.signal_id,
             instrument=signal.instrument,
@@ -37,6 +46,9 @@ class PositionMonitor:
             targets=[signal.target_1, signal.target_2, signal.target_3],
             peak_price=signal.entry,
             trough_price=signal.entry,
+            auto_traded=auto_traded,
+            quantity=float(quantity or 0),
+            order_id=str(order_id or ""),
         )
         self.store.save_position(pos)
         return pos
@@ -139,4 +151,9 @@ class PositionMonitor:
         self.notify(
             f"{'✅' if pnl >= 0 else '🛑'} *{label}*\n`{pos.instrument}`\nPnL `{pnl:+.2f}%` @ `{ltp:.2f}`"
         )
+        if self.on_exit is not None:
+            try:
+                self.on_exit(pos, reason)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("on_exit hook failed for %s: %s", pos.instrument, exc)
         return {"type": reason, "instrument": pos.instrument, "pnl_pct": pnl, "ltp": ltp}

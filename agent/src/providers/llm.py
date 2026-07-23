@@ -739,11 +739,12 @@ def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any
     # Optional reasoning activation for relays requiring opt-in (e.g. OpenRouter).
     # Moonshot/DeepSeek official APIs emit reasoning by default and ignore this field.
     effort = get_env_config().llm.langchain_reasoning_effort.strip().lower()
+    llm_cfg = get_env_config().llm
     kwargs: dict[str, Any] = {
         "model": name,
         "temperature": temperature,
-        "timeout": get_env_config().llm.timeout_seconds,
-        "max_retries": get_env_config().llm.max_retries,
+        "timeout": llm_cfg.timeout_seconds,
+        "max_retries": llm_cfg.max_retries,
         "callbacks": callbacks,
         "extra_body": (
             {"reasoning": {"effort": effort}}
@@ -752,6 +753,10 @@ def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any
         ),
         "vibe_provider": provider,
     }
+    # Cap output size so OpenRouter/Requesty do not reserve model-max tokens
+    # (often 65k) against the account balance and return HTTP 402.
+    if llm_cfg.langchain_max_tokens is not None:
+        kwargs["max_tokens"] = llm_cfg.langchain_max_tokens
     if caps.default_headers:
         headers = dict(caps.default_headers)
         if caps.name in {"moonshot", "kimi-coding"}:

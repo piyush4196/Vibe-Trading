@@ -30,6 +30,8 @@ class WatcherConfig:
     include_currency: bool = True
     max_instruments: int = 200
     extra_symbols: list[str] = field(default_factory=list)
+    # When non-empty, only these symbols (plus any resolved options for them) are watched.
+    watch_only_symbols: list[str] = field(default_factory=list)
 
     min_confidence: float = 80.0
     preferred_rr: float = 3.0
@@ -38,6 +40,15 @@ class WatcherConfig:
 
     alert_cooldown_seconds: int = 1800
     confidence_bump_to_resend: float = 5.0
+
+    # Opt-in: place paper/live orders when confidence ≥ min_confidence (and RR gates pass).
+    # Off by default — alerts still work without this.
+    auto_trade_enabled: bool = False
+    auto_trade_quantity: float = 1.0
+    auto_trade_profile_id: str = "upstox-paper-trade"
+    # Empty = trade any signalled instrument; otherwise restrict to these symbols.
+    auto_trade_symbols: list[str] = field(default_factory=list)
+    auto_trade_on_exit: bool = True
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -51,8 +62,9 @@ class WatcherConfig:
         payload = dict(data or {})
         known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
         clean = {k: v for k, v in payload.items() if k in known}
-        if "extra_symbols" in clean and clean["extra_symbols"] is None:
-            clean["extra_symbols"] = []
+        for list_key in ("extra_symbols", "watch_only_symbols", "auto_trade_symbols"):
+            if list_key in clean and clean[list_key] is None:
+                clean[list_key] = []
         return cls(**clean)
 
     def state_dir(self) -> Path:

@@ -65,12 +65,12 @@ describe("RunnerStatus compact connector panel", () => {
 
     await user.click(screen.getByRole("button", { name: /connector runtime/i }));
 
-    expect(screen.queryByText("alpaca", { exact: false })).not.toBeInTheDocument();
-    expect(screen.getByText("longbridge", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("binance", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("futu", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("okx", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("ibkr", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("alpaca")).not.toBeInTheDocument();
+    expect(screen.getByText("longbridge")).toBeInTheDocument();
+    expect(screen.getByText("binance")).toBeInTheDocument();
+    expect(screen.getByText("futu")).toBeInTheDocument();
+    expect(screen.getByText("okx")).toBeInTheDocument();
+    expect(screen.getByText("ibkr")).toBeInTheDocument();
   });
 
   it.each([false, null])(
@@ -89,8 +89,8 @@ describe("RunnerStatus compact connector panel", () => {
 
       await user.click(screen.getByRole("button", { name: /connector runtime/i }));
 
-      expect(screen.getByText("connected-sdk", { exact: false })).toBeInTheDocument();
-      expect(screen.getByText("ready-sdk", { exact: false })).toBeInTheDocument();
+      expect(screen.getByText("connected-sdk")).toBeInTheDocument();
+      expect(screen.getByText("ready-sdk")).toBeInTheDocument();
     },
   );
 
@@ -109,6 +109,32 @@ describe("RunnerStatus compact connector panel", () => {
 
     const list = screen.getByRole("region", { name: i18n.t("runnerStatus.configuredProfiles") });
     expect(list).toHaveClass("max-h-[min(70vh,36rem)]", "overflow-y-auto");
+  });
+
+  it("treats broker_sdk connection_state=connected as Connected (not OAuth Not connected)", async () => {
+    const user = userEvent.setup();
+    render(
+      <RunnerStatus
+        status={status([
+          broker("upstox", {
+            configured: true,
+            connection_state: "connected",
+            transport: "broker_sdk",
+            profile_id: "upstox-live-sdk-readonly",
+            oauth_token_present: false,
+          }),
+        ])}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/1 connected/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /connector runtime/i }));
+
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.queryByText("Not connected")).not.toBeInTheDocument();
+    expect(screen.queryByText(/connector authorize/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Broker credentials are ready/i)).toBeInTheDocument();
   });
 
   it("hides the compact control when every connector is irrelevant", () => {

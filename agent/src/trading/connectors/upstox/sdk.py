@@ -213,13 +213,27 @@ def upstox_configured(config: UpstoxConfig | None = None) -> bool:
 
 
 def check_status(config: UpstoxConfig | None = None) -> dict[str, Any]:
-    """Check HTTP client readiness and config completeness."""
+    """Check HTTP client readiness and config completeness.
+
+    Emits Runtime /live/status fields (``connection_state``, ``configured``,
+    ``credential_source``, ``last_checked_at``) so the Web UI can show
+    connected / not-configured instead of a blank "Status unavailable".
+    """
     cfg = config or load_config()
+    installed = upstox_available()
+    configured = not _missing_fields(cfg)
+    credential_source = "runtime_file" if config_path().exists() else None
+    paper_guard = "simulated_locally" if cfg.is_paper else "config_declared"
     report: dict[str, Any] = {
         "status": "ok",
+        "configured": configured,
+        "credential_source": credential_source,
+        "connection_state": "connected",
+        "error_code": None,
+        "error": None,
         "config": _public_config(cfg),
-        "sdk": {"package": "httpx", "installed": upstox_available()},
-        "paper_guard": "simulated_locally",
+        "sdk": {"package": "httpx", "installed": installed},
+        "paper_guard": paper_guard,
         "host": UPSTOX_API_BASE,
         "markets": [
             "NSE_EQ",
@@ -235,18 +249,26 @@ def check_status(config: UpstoxConfig | None = None) -> dict[str, Any]:
     missing = _missing_fields(cfg)
     if missing:
         report["status"] = "error"
+        report["configured"] = False
+        report["connection_state"] = "not_configured"
+        report["error_code"] = "credentials_missing"
         report["error"] = f"Upstox connector not configured: missing {', '.join(missing)}."
         return report
 
-    if not report["sdk"]["installed"]:
+    if not installed:
         report["status"] = "error"
+        report["connection_state"] = "error"
+        report["error_code"] = "sdk_missing"
         report["error"] = "Optional dependency missing: install with `pip install httpx`."
         return report
 
     try:
         get_account_snapshot(cfg)
     except Exception as exc:  # noqa: BLE001 — surface as status error
+        code = _connection_error_code(exc)
         report["status"] = "error"
+        report["connection_state"] = "error"
+        report["error_code"] = code
         report["error"] = str(exc)
         return report
 
@@ -254,7 +276,17 @@ def check_status(config: UpstoxConfig | None = None) -> dict[str, Any]:
         "profile": cfg.profile,
         "is_paper": cfg.is_paper,
     }
+    report["last_checked_at"] = datetime.now(timezone.utc).isoformat()
     return report
+
+
+def _connection_error_code(exc: Exception) -> str:
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return "network_unreachable"
+    text = type(exc).__name__.lower() + " " + str(exc).lower()
+    if any(token in text for token in ("auth", "token", "permission", "unauthorized", "401", "403")):
+        return "authentication_failed"
+    return "broker_error"
 
 
 def get_account_snapshot(config: UpstoxConfig | None = None) -> dict[str, Any]:

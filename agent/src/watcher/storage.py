@@ -266,6 +266,9 @@ class WatcherStore:
             "status": pos.status,
             "peak_price": pos.peak_price,
             "trough_price": pos.trough_price,
+            "auto_traded": bool(getattr(pos, "auto_traded", False)),
+            "quantity": float(getattr(pos, "quantity", 0) or 0),
+            "order_id": str(getattr(pos, "order_id", "") or ""),
         }
         with self._lock:
             self._conn.execute(
@@ -296,6 +299,9 @@ class WatcherStore:
                     status=data.get("status", "open"),
                     peak_price=float(data.get("peak_price") or 0),
                     trough_price=float(data.get("trough_price") or 0),
+                    auto_traded=bool(data.get("auto_traded") or False),
+                    quantity=float(data.get("quantity") or 0),
+                    order_id=str(data.get("order_id") or ""),
                 )
             )
         return out
