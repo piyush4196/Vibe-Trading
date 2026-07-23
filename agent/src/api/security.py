@@ -355,17 +355,71 @@ def _require_shutdown_authorization(
 ) -> None:
     """Authorize the local shutdown control-plane action."""
     _reject_cross_site_browser_request(request)
-    api_key = _configured_api_key()
-    if api_key:
-        token = _auth_credential_from_header_or_query(cred, None, allow_query=False)
-        if not token or not hmac.compare_digest(token, api_key):
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    token = _auth_credential_from_header_or_query(cred, None, allow_query=False)
+    if _validate_bearer_credential(token, request=request):
         return
+    if _auth_required_for_request(request):
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
     if not _is_local_client(request):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="API_AUTH_KEY is required for non-local API access",
+            detail="Authentication required for non-local API access",
         )
+
+
+def _validate_bearer_credential(
+    token: str,
+    *,
+    request: Request | None = None,
+) -> str:
+    """Accept shared API key or a user JWT. Returns auth kind: ``api_key`` / ``user`` / ````."""
+    if not token:
+        return ""
+    api_key = _configured_api_key()
+    if api_key and hmac.compare_digest(token, api_key):
+        if request is not None:
+            request.state.auth_kind = "api_key"
+            request.state.user = {"username": "api_key", "role": "admin"}
+        return "api_key"
+    # Try user JWT (even when API key is also configured).
+    try:
+        from src.auth.tokens import TokenError, decode_access_token
+        from src.auth.users import get_user
+
+        payload = decode_access_token(token)
+        user = get_user(str(payload["sub"]))
+        if user is None or user.disabled:
+            return ""
+        if request is not None:
+            request.state.auth_kind = "user"
+            request.state.user = user.public_dict()
+        return "user"
+    except Exception:
+        return ""
+
+
+def _users_configured_safe() -> bool:
+    try:
+        from src.auth.users import users_configured
+
+        return bool(users_configured())
+    except Exception:
+        return False
+
+
+def _auth_required_for_request(request: Request) -> bool:
+    """Whether this request must present a credential (401 when missing/invalid).
+
+    Shared ``API_AUTH_KEY`` always requires a credential. Creating local users
+    alone does **not** flip remote callers from the historical 403 to 401 —
+    users are an alternate login path. Set ``AUTH_REQUIRE_LOGIN=1`` to require
+    login even on loopback once users exist.
+    """
+    if _configured_api_key():
+        return True
+    if get_env_config().api.auth_require_login and _users_configured_safe():
+        return True
+    return False
 
 
 def _validate_api_auth(
@@ -377,26 +431,34 @@ def _validate_api_auth(
 ) -> None:
     """Validate configured auth, preserving loopback-only dev mode.
 
-    Key-first precedence: when an API key is configured every peer -- including
-    loopback -- must present a valid credential (GHSA-7wgj). Only when no key is
-    configured does the loopback dev-trust apply. Mirrors
-    :func:`require_settings_write_auth`.
+    Accepts either the shared ``API_AUTH_KEY`` or a user JWT minted by
+    ``POST /auth/login``. Key/JWT-first precedence when credentials are
+    required; loopback trust only when neither an API key nor
+    ``AUTH_REQUIRE_LOGIN`` mandates a credential.
     """
     if request.method.upper() not in _SAFE_BROWSER_METHODS:
         _reject_cross_site_browser_request(request)
 
-    api_key = _configured_api_key()
-    if api_key:
-        token = _auth_credential_from_header_or_query(cred, query_api_key, allow_query=allow_query)
-        if not token or not hmac.compare_digest(token, api_key):
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    token = _auth_credential_from_header_or_query(cred, query_api_key, allow_query=allow_query)
+    kind = _validate_bearer_credential(token, request=request)
+    if kind:
         return
 
+    # Offered credential was invalid → always 401.
+    if token:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+
+    if _auth_required_for_request(request):
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+
     if _is_local_client(request):
+        request.state.auth_kind = "loopback"
+        request.state.user = {"username": "local", "role": "admin"}
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="API_AUTH_KEY is required for non-local API access",
+        detail="Authentication required for non-local API access "
+        "(set API_AUTH_KEY or create a user and POST /auth/login)",
     )
 
 
@@ -482,27 +544,28 @@ async def require_event_stream_auth(
     EventSource cannot send an ``Authorization`` header, so a browser first
     mints a short-lived, single-use ticket via ``POST /auth/sse-ticket`` (which
     is itself header-authenticated) and passes it as ``?ticket=``. Non-browser
-    callers keep using the bearer header unchanged. The long-lived API key is
-    never accepted in the query string — that would leak it into browser
-    history, proxy/access logs, and Referer headers.
+    callers keep using the bearer header (API key or user JWT) unchanged.
     """
     if request.method.upper() not in _SAFE_BROWSER_METHODS:
         _reject_cross_site_browser_request(request)
 
-    api_key = _configured_api_key()
-    if api_key:
-        token = cred.credentials if (cred and cred.credentials) else ""
-        if token and hmac.compare_digest(token, api_key):
-            return
-        if ticket and _consume_sse_ticket(ticket):
-            return
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    token = cred.credentials if (cred and cred.credentials) else ""
+    if _validate_bearer_credential(token, request=request):
+        return
+    if ticket and _consume_sse_ticket(ticket):
+        return
+
+    if token:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+
+    if _auth_required_for_request(request):
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
 
     if _is_local_client(request):
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="API_AUTH_KEY is required for non-local API access",
+        detail="Authentication required for non-local API access",
     )
 
 
@@ -511,13 +574,13 @@ async def require_local_or_auth(
     cred: Optional[HTTPAuthorizationCredentials] = Security(_security),
 ) -> None:
     """Protect settings access when dev-mode auth is disabled."""
-    if _configured_api_key():
+    if _auth_required_for_request(request):
         await require_auth(request, cred)
         return
     if not _is_local_client(request):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Settings access requires API_AUTH_KEY or a local loopback client",
+            detail="Settings access requires authentication or a local loopback client",
         )
 
 
@@ -526,17 +589,15 @@ async def require_settings_write_auth(
     cred: Optional[HTTPAuthorizationCredentials] = Security(_security),
 ) -> None:
     """Require explicit authorization before changing credential-routing settings."""
-    api_key = _configured_api_key()
-    if api_key:
-        token = _auth_credential_from_header_or_query(cred, None, allow_query=False)
-        if not token or not hmac.compare_digest(token, api_key):
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    token = _auth_credential_from_header_or_query(cred, None, allow_query=False)
+    if _validate_bearer_credential(token, request=request):
         return
-
+    if _auth_required_for_request(request):
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
     if not _is_local_client(request):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Settings writes require API_AUTH_KEY or a local loopback client",
+            detail="Settings writes require authentication or a local loopback client",
         )
 
 

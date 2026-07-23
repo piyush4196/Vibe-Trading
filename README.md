@@ -713,7 +713,9 @@ Copy `agent/.env.example` to `agent/.env` and uncomment the provider block you w
 | `LANGCHAIN_MODEL_NAME` | Yes | Model name (e.g. `deepseek-v4-pro`) |
 | `TUSHARE_TOKEN` | No | Tushare Pro token for A-share data (falls back to AKShare) |
 | `TIMEOUT_SECONDS` | No | LLM call timeout, default 120s |
-| `API_AUTH_KEY` | Recommended for network deployments | Bearer token required when the API is reachable from non-local clients |
+| `API_AUTH_KEY` | Recommended for network deployments | Shared Bearer token for non-local API clients (also accepted alongside user JWTs) |
+| `AUTH_JWT_SECRET` | No | JWT signing secret (defaults to `API_AUTH_KEY` or `~/.vibe-trading/auth_secret`) |
+| `AUTH_REQUIRE_LOGIN` | No | When `1`, require login even on loopback once users exist |
 | `VIBE_TRADING_ENABLE_SHELL_TOOLS` | No | Explicit opt-in for shell-capable tools in remote API/MCP-SSE style deployments |
 | `VIBE_TRADING_ALLOWED_FILE_ROOTS` | No | Extra comma-separated roots for document and broker-journal imports |
 | `VIBE_TRADING_ALLOWED_RUN_ROOTS` | No | Extra comma-separated roots for generated-code run directories |
@@ -982,7 +984,7 @@ Interactive docs: `http://localhost:8899/docs`
 
 ### Security defaults
 
-For localhost development, `vibe-trading serve` keeps the browser workflow simple. For any non-local client, sensitive API endpoints require `API_AUTH_KEY`; use `Authorization: Bearer <key>` for JSON/upload requests. Browser EventSource streams are handled by the Web UI after you enter the same key once in Settings.
+For localhost development, `vibe-trading serve` keeps the browser workflow simple. For any non-local client, sensitive API endpoints require credentials: either shared `API_AUTH_KEY`, or a user JWT from `POST /auth/login` after creating a user (`python scripts/create_user.py --username admin --prompt-password` or `vibe-trading user create admin --prompt-password`). Use `Authorization: Bearer <key-or-token>` for JSON/upload requests. Browser EventSource streams are handled by the Web UI after you enter the same credential once in Settings.
 
 Shell-capable tools (`bash` / `background_run`) are enabled only for the interactive local CLI. Every other surface — the HTTP/SSE API and the MCP server on **all** transports (stdio included) — keeps them off unless you explicitly opt in with `VIBE_TRADING_ENABLE_SHELL_TOOLS=1` (or pass `--enable-shell-tools` to `vibe-trading-mcp`). Transport type never implicitly grants shell access. Document and journal readers are limited to upload/import roots by default; place files under `agent/uploads`, `agent/runs`, `./uploads`, `./data`, `~/.vibe-trading/uploads`, or `~/.vibe-trading/imports`, or add a dedicated directory through `VIBE_TRADING_ALLOWED_FILE_ROOTS`.
 

@@ -256,6 +256,11 @@ class APIConfig(_EnvBase):
     vibe_trading_allowed_run_roots: str = Field(
         alias="VIBE_TRADING_ALLOWED_RUN_ROOTS", default="",
     )
+    # Local multi-user auth (optional). When users exist, JWT login works
+    # alongside the shared API_AUTH_KEY.
+    auth_jwt_secret: str = Field(alias="AUTH_JWT_SECRET", default="")
+    auth_jwt_ttl_seconds: int = Field(alias="AUTH_JWT_TTL_SECONDS", default=43200)
+    auth_require_login: EnvBool = Field(alias="AUTH_REQUIRE_LOGIN", default=False)
     vibe_trading_api_url: str = Field(
         alias="VIBE_TRADING_API_URL", default="http://127.0.0.1:8000",
     )
