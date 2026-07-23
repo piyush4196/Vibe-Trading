@@ -243,6 +243,14 @@ export const api = {
   // Read the persistent runtime status across all authorized brokers (SPEC §7.5).
   // Polled by the RunnerStatus panel; a plain authenticated GET, never a chat message.
   getLiveStatus: (signal?: AbortSignal) => request<LiveStatus>("/live/status", { signal }),
+  getDashboardSummary: (signal?: AbortSignal) =>
+    request<DashboardSummary>("/dashboard/summary", { signal }),
+  getIntegrationsSettings: () => request<IntegrationsSettings>("/settings/integrations"),
+  updateIntegrationsSettings: (settings: UpdateIntegrationsSettingsRequest) =>
+    request<IntegrationsSettings>("/settings/integrations", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
   verifyConnector: (profileId: string) =>
     request<ConnectorVerifyResponse>(`/live/connectors/${encodeURIComponent(profileId)}/verify?force=true`, {
       method: "POST",
@@ -326,6 +334,13 @@ export interface UpdateLLMSettingsRequest {
   reasoning_effort?: string;
 }
 
+export interface SecretFieldStatus {
+  key: string;
+  label: string;
+  configured: boolean;
+  hint?: string | null;
+}
+
 export interface DataSourceSettings {
   tushare_token_configured: boolean;
   tushare_token_hint?: string | null;
@@ -333,11 +348,110 @@ export interface DataSourceSettings {
   baostock_installed: boolean;
   baostock_message: string;
   env_path: string;
+  market_data_keys?: SecretFieldStatus[];
 }
 
 export interface UpdateDataSourceSettingsRequest {
   tushare_token?: string;
   clear_tushare_token?: boolean;
+  finnhub_api_key?: string;
+  clear_finnhub_api_key?: boolean;
+  fmp_api_key?: string;
+  clear_fmp_api_key?: boolean;
+  fred_api_key?: string;
+  clear_fred_api_key?: boolean;
+  alphavantage_api_key?: string;
+  clear_alphavantage_api_key?: boolean;
+}
+
+export interface IntegrationsSettings {
+  api_auth_key_configured: boolean;
+  users_configured: boolean;
+  users_count: number;
+  auth_require_login: boolean;
+  upstox_configured: boolean;
+  upstox_config_path: string;
+  watcher_telegram_configured: boolean;
+  watcher_telegram_enabled: boolean;
+  watcher_config_path: string;
+  audit_log_path: string;
+  live_audit_entries: number;
+  notes: string[];
+}
+
+export interface UpdateIntegrationsSettingsRequest {
+  upstox_access_token?: string;
+  clear_upstox_access_token?: boolean;
+  telegram_bot_token?: string;
+  clear_telegram_bot_token?: boolean;
+  telegram_chat_id?: string;
+  telegram_enabled?: boolean;
+}
+
+export interface PeriodPnl {
+  label: string;
+  pnl_pct: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+}
+
+export interface DailyPnlPoint {
+  date: string;
+  pnl_pct: number;
+  trades: number;
+}
+
+export interface MonthlyPnlPoint {
+  month: string;
+  pnl_pct: number;
+  trades: number;
+}
+
+export interface DashboardSummary {
+  generated_at: string;
+  today: PeriodPnl;
+  week: PeriodPnl;
+  month: PeriodPnl;
+  all_time: PeriodPnl;
+  daily: DailyPnlPoint[];
+  monthly: MonthlyPnlPoint[];
+  recent_trades: Array<{
+    signal_id: string;
+    closed_at?: string | null;
+    pnl_pct: number;
+    exit_reason: string;
+    instrument: string;
+    side: string;
+  }>;
+  recent_audit: Array<{
+    audit_id: string;
+    ts: string;
+    kind: string;
+    outcome: string;
+    server: string;
+    intent?: string | null;
+    error?: string | null;
+  }>;
+  recent_runs: Array<{
+    run_id: string;
+    created_at: string;
+    status: string;
+    prompt: string;
+    total_return?: number | null;
+    sharpe?: number | null;
+  }>;
+  open_positions: number;
+  orders: {
+    can_place_orders: boolean;
+    paper_supported: boolean;
+    live_supported: boolean;
+    upstox_configured: boolean;
+    upstox_live_orders: boolean;
+    note: string;
+  };
+  sources: Record<string, string>;
 }
 
 export interface ChannelAdapterStatus {

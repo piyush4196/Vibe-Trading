@@ -1,10 +1,18 @@
 import i18n from "@/i18n";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Database, KeyRound, Loader2, MessageSquareMore, Play, RefreshCw, RotateCcw, Save, Server, SlidersHorizontal, Square } from "lucide-react";
+import { Database, KeyRound, Loader2, MessageSquareMore, Play, Plug2, RefreshCw, RotateCcw, Save, Server, SlidersHorizontal, Square } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { QVerisSettings } from "@/components/settings/QVerisSettings"; // QVERIS-INTEGRATION
-import { api, isAuthRequiredError, type ChannelRuntimeStatus, type DataSourceSettings, type LLMProviderOption, type LLMSettings } from "@/lib/api";
+import {
+  api,
+  isAuthRequiredError,
+  type ChannelRuntimeStatus,
+  type DataSourceSettings,
+  type IntegrationsSettings,
+  type LLMProviderOption,
+  type LLMSettings,
+} from "@/lib/api";
 import { getApiAuthKey, setApiAuthKey } from "@/lib/apiAuth";
 
 interface LLMFormState {
@@ -45,6 +53,17 @@ export function Settings() {
   const [clearApiKey, setClearApiKey] = useState(false);
   const [tushareToken, setTushareToken] = useState("");
   const [clearTushareToken, setClearTushareToken] = useState(false);
+  const [finnhubKey, setFinnhubKey] = useState("");
+  const [fmpKey, setFmpKey] = useState("");
+  const [fredKey, setFredKey] = useState("");
+  const [alphaKey, setAlphaKey] = useState("");
+  const [integrations, setIntegrations] = useState<IntegrationsSettings | null>(null);
+  const [upstoxToken, setUpstoxToken] = useState("");
+  const [clearUpstox, setClearUpstox] = useState(false);
+  const [telegramBotToken, setTelegramBotToken] = useState("");
+  const [telegramChatId, setTelegramChatId] = useState("");
+  const [telegramEnabled, setTelegramEnabled] = useState(true);
+  const [integrationsSaving, setIntegrationsSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dataSaving, setDataSaving] = useState(false);
@@ -59,8 +78,9 @@ export function Settings() {
       api.getLLMSettings(),
       api.getDataSourceSettings(),
       api.getChannelStatus(),
+      api.getIntegrationsSettings(),
     ])
-      .then(([llmResult, dataSourceResult, channelResult]) => {
+      .then(([llmResult, dataSourceResult, channelResult, integrationsResult]) => {
         if (!alive) return;
 
         if (llmResult.status === "fulfilled") {
@@ -94,6 +114,11 @@ export function Settings() {
           const message = channelResult.reason instanceof Error ? channelResult.reason.message : "Unknown error";
           toast.error(`${t("settings.channels.refreshFailed")}: ${message}`);
           setChannelStatus(null);
+        }
+
+        if (integrationsResult.status === "fulfilled") {
+          setIntegrations(integrationsResult.value);
+          setTelegramEnabled(integrationsResult.value.watcher_telegram_enabled);
         }
       })
       .finally(() => {
@@ -193,15 +218,46 @@ export function Settings() {
       const updated = await api.updateDataSourceSettings({
         tushare_token: tushareToken.trim() || undefined,
         clear_tushare_token: clearTushareToken,
+        finnhub_api_key: finnhubKey.trim() || undefined,
+        fmp_api_key: fmpKey.trim() || undefined,
+        fred_api_key: fredKey.trim() || undefined,
+        alphavantage_api_key: alphaKey.trim() || undefined,
       });
       setDataSettings(updated);
       setTushareToken("");
       setClearTushareToken(false);
+      setFinnhubKey("");
+      setFmpKey("");
+      setFredKey("");
+      setAlphaKey("");
       toast.success("Data source settings saved");
     } catch (error) {
       toast.error(`Failed to save data source settings: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setDataSaving(false);
+    }
+  };
+
+  const submitIntegrations = async (event: FormEvent) => {
+    event.preventDefault();
+    setIntegrationsSaving(true);
+    try {
+      const updated = await api.updateIntegrationsSettings({
+        upstox_access_token: upstoxToken.trim() || undefined,
+        clear_upstox_access_token: clearUpstox,
+        telegram_bot_token: telegramBotToken.trim() || undefined,
+        telegram_chat_id: telegramChatId.trim() || undefined,
+        telegram_enabled: telegramEnabled,
+      });
+      setIntegrations(updated);
+      setUpstoxToken("");
+      setClearUpstox(false);
+      setTelegramBotToken("");
+      toast.success("Integrations saved");
+    } catch (error) {
+      toast.error(`Failed to save integrations: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIntegrationsSaving(false);
     }
   };
 
@@ -405,6 +461,99 @@ export function Settings() {
       <QVerisSettings />
 
       {channelsSection}
+
+      <form onSubmit={submitIntegrations} className="rounded-lg border bg-card p-5 shadow-sm">
+        <div className="mb-5 space-y-1">
+          <div className="flex items-center gap-2">
+            <Plug2 className="h-4 w-4 text-primary" />
+            <h2 className="text-base font-semibold">{"Trading & alerts"}</h2>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {"Configure Upstox access, watcher Telegram alerts, and review auth readiness. Broker profiles and live mandates still use Runtime / Agent."}
+          </p>
+        </div>
+
+        {integrations ? (
+          <>
+            <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">{"API auth key"}</div>
+                <div className={`text-sm font-medium ${integrations.api_auth_key_configured ? "text-success" : "text-muted-foreground"}`}>
+                  {integrations.api_auth_key_configured ? "Configured" : "Not set"}
+                </div>
+              </div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">{"API users"}</div>
+                <div className="text-sm font-medium">{integrations.users_count} {integrations.users_configured ? "active" : "none"}</div>
+              </div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">{"Upstox"}</div>
+                <div className={`text-sm font-medium ${integrations.upstox_configured ? "text-success" : "text-warning"}`}>
+                  {integrations.upstox_configured ? "Configured" : "Needs token"}
+                </div>
+              </div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">{"Live audit log"}</div>
+                <div className="text-sm font-medium">{integrations.live_audit_entries} entries</div>
+              </div>
+            </div>
+
+            <div className="grid gap-5 lg:grid-cols-2">
+              <div className="grid gap-4">
+                <label className="grid gap-2">
+                  <span className={labelClass}>{"Upstox access token"}</span>
+                  <input
+                    type="password"
+                    value={upstoxToken}
+                    onChange={(e) => setUpstoxToken(e.target.value)}
+                    className={fieldClass}
+                    placeholder={integrations.upstox_configured ? "Configured — leave blank to keep" : "Paste access_token"}
+                    disabled={clearUpstox}
+                  />
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={clearUpstox} onChange={(e) => { setClearUpstox(e.target.checked); if (e.target.checked) setUpstoxToken(""); }} className="h-3.5 w-3.5 accent-primary" />
+                    {"Clear Upstox token"}
+                  </label>
+                  <span className={hintClass}>{`Saved to ${integrations.upstox_config_path}`}</span>
+                </label>
+              </div>
+              <div className="grid gap-4">
+                <label className="grid gap-2">
+                  <span className={labelClass}>{"Telegram bot token"}</span>
+                  <input type="password" value={telegramBotToken} onChange={(e) => setTelegramBotToken(e.target.value)} className={fieldClass} placeholder={integrations.watcher_telegram_configured ? "Configured — leave blank to keep" : "BotFather token"} />
+                </label>
+                <label className="grid gap-2">
+                  <span className={labelClass}>{"Telegram chat id"}</span>
+                  <input value={telegramChatId} onChange={(e) => setTelegramChatId(e.target.value)} className={fieldClass} placeholder={"Numeric chat id"} />
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={telegramEnabled} onChange={(e) => setTelegramEnabled(e.target.checked)} className="h-3.5 w-3.5 accent-primary" />
+                  {"Enable Telegram alerts for the market watcher"}
+                </label>
+              </div>
+            </div>
+
+            <ul className="mt-4 space-y-1 text-xs text-muted-foreground">
+              {integrations.notes.map((note) => (
+                <li key={note}>• {note}</li>
+              ))}
+            </ul>
+
+            <button
+              type="submit"
+              disabled={integrationsSaving}
+              className="mt-4 inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {integrationsSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {integrationsSaving ? "Saving…" : "Save trading & alerts"}
+            </button>
+          </>
+        ) : (
+          <div className="rounded-md border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
+            {"Integrations status unavailable"}
+          </div>
+        )}
+      </form>
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold tracking-tight">{"LLM Settings"}</h2>
@@ -631,6 +780,25 @@ export function Settings() {
                 </label>
               </div>
             </label>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="grid gap-2">
+                <span className={labelClass}>{"Finnhub API key"}</span>
+                <input type="password" value={finnhubKey} onChange={(e) => setFinnhubKey(e.target.value)} className={fieldClass} placeholder={dataSettings.market_data_keys?.find((k) => k.key === "FINNHUB_API_KEY")?.configured ? "Configured — leave blank to keep" : "Optional"} />
+              </label>
+              <label className="grid gap-2">
+                <span className={labelClass}>{"FMP API key"}</span>
+                <input type="password" value={fmpKey} onChange={(e) => setFmpKey(e.target.value)} className={fieldClass} placeholder={dataSettings.market_data_keys?.find((k) => k.key === "FMP_API_KEY")?.configured ? "Configured — leave blank to keep" : "Optional"} />
+              </label>
+              <label className="grid gap-2">
+                <span className={labelClass}>{"FRED API key"}</span>
+                <input type="password" value={fredKey} onChange={(e) => setFredKey(e.target.value)} className={fieldClass} placeholder={dataSettings.market_data_keys?.find((k) => k.key === "FRED_API_KEY")?.configured ? "Configured — leave blank to keep" : "Optional"} />
+              </label>
+              <label className="grid gap-2">
+                <span className={labelClass}>{"Alpha Vantage API key"}</span>
+                <input type="password" value={alphaKey} onChange={(e) => setAlphaKey(e.target.value)} className={fieldClass} placeholder={dataSettings.market_data_keys?.find((k) => k.key === "ALPHAVANTAGE_API_KEY")?.configured ? "Configured — leave blank to keep" : "Optional"} />
+              </label>
+            </div>
 
             <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
               <span className="font-medium text-foreground">{i18n.t("settings.saved")}: </span>
