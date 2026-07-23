@@ -481,6 +481,8 @@ Connector-first profiles. Each does read + paper-account order placement; live o
 
 Paper-vs-live is a **structural per-broker runtime guard** (account-id format, host separation, demo flag, or trade environment), never a config flag the agent can flip. A broker exposing no such discriminator is capped at paper + read-only.
 
+**Autonomous watcher (Upstox):** `vibe-trading watch start` runs an always-on Indian-market desk analyst — multi-timeframe indicators, ≥80% confidence + ≥1:2 RR gates, anti-spam, Telegram alerts with inline buttons, position/exit monitoring, and outcome learning (`vibe-trading watch --help`).
+
 </details>
 
 <details>
