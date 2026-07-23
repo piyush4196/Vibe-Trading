@@ -74,6 +74,15 @@ class UpdateLLMSettingsRequest(BaseModel):
     reasoning_effort: Optional[str] = None
 
 
+class SecretFieldStatus(BaseModel):
+    """Configured status for an optional secret env key."""
+
+    key: str
+    label: str
+    configured: bool
+    hint: Optional[str] = None
+
+
 class DataSourceSettingsResponse(BaseModel):
     """Current data source credential settings."""
 
@@ -83,6 +92,7 @@ class DataSourceSettingsResponse(BaseModel):
     baostock_installed: bool
     baostock_message: str
     env_path: str
+    market_data_keys: List[SecretFieldStatus] = Field(default_factory=list)
 
 
 class UpdateDataSourceSettingsRequest(BaseModel):
@@ -90,6 +100,58 @@ class UpdateDataSourceSettingsRequest(BaseModel):
 
     tushare_token: Optional[str] = None
     clear_tushare_token: bool = False
+    finnhub_api_key: Optional[str] = None
+    clear_finnhub_api_key: bool = False
+    fmp_api_key: Optional[str] = None
+    clear_fmp_api_key: bool = False
+    fred_api_key: Optional[str] = None
+    clear_fred_api_key: bool = False
+    alphavantage_api_key: Optional[str] = None
+    clear_alphavantage_api_key: bool = False
+
+
+class IntegrationsSettingsResponse(BaseModel):
+    """Trading / auth / watcher integration readiness for Settings UI."""
+
+    api_auth_key_configured: bool
+    users_configured: bool
+    users_count: int = 0
+    auth_require_login: bool = False
+    upstox_configured: bool
+    upstox_config_path: str
+    watcher_telegram_configured: bool
+    watcher_telegram_enabled: bool = False
+    watcher_config_path: str
+    audit_log_path: str
+    live_audit_entries: int = 0
+    notes: List[str] = Field(default_factory=list)
+
+
+class UpdateIntegrationsSettingsRequest(BaseModel):
+    """Persist Upstox token and watcher Telegram settings."""
+
+    upstox_access_token: Optional[str] = None
+    clear_upstox_access_token: bool = False
+    telegram_bot_token: Optional[str] = None
+    clear_telegram_bot_token: bool = False
+    telegram_chat_id: Optional[str] = None
+    telegram_enabled: Optional[bool] = None
+
+
+_MARKET_DATA_KEYS: tuple[tuple[str, str], ...] = (
+    ("FINNHUB_API_KEY", "Finnhub"),
+    ("FMP_API_KEY", "Financial Modeling Prep"),
+    ("FRED_API_KEY", "FRED (macro)"),
+    ("ALPHAVANTAGE_API_KEY", "Alpha Vantage"),
+)
+_SECRET_PLACEHOLDERS = {
+    "",
+    "xxx",
+    "your-key",
+    "your-tushare-token",
+    "sk-xxx",
+    "ts-xxx",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +283,11 @@ def _build_llm_settings_response(
     )
 
 
+def _secret_configured(value: str) -> bool:
+    host = _host()
+    return bool(host._is_configured_secret(value, _SECRET_PLACEHOLDERS | TUSHARE_TOKEN_PLACEHOLDERS))
+
+
 def _build_data_source_settings_response(
     values: Optional[Dict[str, str]] = None,
 ) -> DataSourceSettingsResponse:
@@ -240,6 +307,14 @@ def _build_data_source_settings_response(
         baostock_message = "BaoStock package is installed, but this project has no BaoStock loader."
     else:
         baostock_message = "No BaoStock loader is registered in this project."
+    market_data_keys = [
+        SecretFieldStatus(
+            key=env_key,
+            label=label,
+            configured=_secret_configured(env_values.get(env_key, "")),
+        )
+        for env_key, label in _MARKET_DATA_KEYS
+    ]
     return DataSourceSettingsResponse(
         tushare_token_configured=token_configured,
         tushare_token_hint=None,
@@ -247,7 +322,73 @@ def _build_data_source_settings_response(
         baostock_installed=installed,
         baostock_message=baostock_message,
         env_path=host._project_relative_path(host.ENV_PATH),
+        market_data_keys=market_data_keys,
     )
+
+
+def _build_integrations_settings_response() -> IntegrationsSettingsResponse:
+    from src.auth.users import list_users, users_configured
+    from src.config.accessor import get_env_config
+    from src.config.paths import get_runtime_root
+    from src.watcher.config import WatcherConfig
+
+    root = get_runtime_root()
+    cfg = get_env_config().api
+    upstox_path = root / "upstox.json"
+    upstox_configured = False
+    if upstox_path.exists():
+        try:
+            data = json.loads(upstox_path.read_text(encoding="utf-8"))
+            upstox_configured = bool(str(data.get("access_token") or "").strip())
+        except (OSError, json.JSONDecodeError):
+            upstox_configured = False
+
+    watcher = WatcherConfig.load()
+    tg_ok = bool(watcher.telegram_bot_token.strip() and watcher.telegram_chat_id.strip())
+    audit_path = root / "live" / "audit.jsonl"
+    audit_count = 0
+    if audit_path.exists():
+        try:
+            audit_count = sum(1 for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip())
+        except OSError:
+            audit_count = 0
+
+    users = list_users()
+    return IntegrationsSettingsResponse(
+        api_auth_key_configured=bool(cfg.api_auth_key),
+        users_configured=users_configured(),
+        users_count=len(users),
+        auth_require_login=bool(cfg.auth_require_login),
+        upstox_configured=upstox_configured,
+        upstox_config_path=str(upstox_path),
+        watcher_telegram_configured=tg_ok,
+        watcher_telegram_enabled=bool(watcher.telegram_enabled),
+        watcher_config_path=str(watcher.state_dir() / "config.json"),
+        audit_log_path=str(audit_path),
+        live_audit_entries=audit_count,
+        notes=[
+            "Orders: ask the Agent or use vibe-trading connector / trading_place_order.",
+            "Upstox paper orders are simulated locally; live Upstox is market-data/read-only.",
+            "Create API users: vibe-trading user create <name> --prompt-password",
+            "Live order audit: ~/.vibe-trading/live/audit.jsonl",
+        ],
+    )
+
+
+def _apply_secret_update(
+    updates: Dict[str, str],
+    current_values: Dict[str, str],
+    *,
+    env_key: str,
+    new_value: Optional[str],
+    clear: bool,
+) -> None:
+    if clear:
+        updates[env_key] = ""
+    elif new_value is not None and new_value.strip():
+        updates[env_key] = new_value.strip()
+    elif env_key in current_values:
+        updates[env_key] = current_values[env_key]
 
 
 def _sync_runtime_env(provider: LLMProviderOption, updates: Dict[str, str]) -> None:
@@ -445,26 +586,112 @@ def register_settings_routes(
     )
     async def update_data_source_settings(payload: UpdateDataSourceSettingsRequest):
         """Persist project-local data source credentials and update the running process."""
-        host_ref = _host()
         current_values = _read_settings_env_values()
         updates: Dict[str, str] = {}
 
-        if payload.clear_tushare_token:
-            updates["TUSHARE_TOKEN"] = ""
-        elif payload.tushare_token is not None and payload.tushare_token.strip():
-            updates["TUSHARE_TOKEN"] = payload.tushare_token.strip()
-        elif "TUSHARE_TOKEN" in current_values:
-            updates["TUSHARE_TOKEN"] = current_values["TUSHARE_TOKEN"]
+        _apply_secret_update(
+            updates,
+            current_values,
+            env_key="TUSHARE_TOKEN",
+            new_value=payload.tushare_token,
+            clear=payload.clear_tushare_token,
+        )
+        _apply_secret_update(
+            updates,
+            current_values,
+            env_key="FINNHUB_API_KEY",
+            new_value=payload.finnhub_api_key,
+            clear=payload.clear_finnhub_api_key,
+        )
+        _apply_secret_update(
+            updates,
+            current_values,
+            env_key="FMP_API_KEY",
+            new_value=payload.fmp_api_key,
+            clear=payload.clear_fmp_api_key,
+        )
+        _apply_secret_update(
+            updates,
+            current_values,
+            env_key="FRED_API_KEY",
+            new_value=payload.fred_api_key,
+            clear=payload.clear_fred_api_key,
+        )
+        _apply_secret_update(
+            updates,
+            current_values,
+            env_key="ALPHAVANTAGE_API_KEY",
+            new_value=payload.alphavantage_api_key,
+            clear=payload.clear_alphavantage_api_key,
+        )
 
+        saved_values: Dict[str, str] | None = None
         if updates:
             saved_values = _persist_settings_updates(updates)
-            token = updates.get("TUSHARE_TOKEN", "").strip()
-            if host_ref._is_configured_secret(token, TUSHARE_TOKEN_PLACEHOLDERS):
-                os.environ["TUSHARE_TOKEN"] = token
-            else:
-                os.environ.pop("TUSHARE_TOKEN", None)
+            for key in (
+                "TUSHARE_TOKEN",
+                "FINNHUB_API_KEY",
+                "FMP_API_KEY",
+                "FRED_API_KEY",
+                "ALPHAVANTAGE_API_KEY",
+            ):
+                if key not in updates:
+                    continue
+                token = updates.get(key, "").strip()
+                if _secret_configured(token):
+                    os.environ[key] = token
+                else:
+                    os.environ.pop(key, None)
             reset_env_config()
 
         return _build_data_source_settings_response(
-            saved_values if updates else _read_settings_env_values()
+            saved_values if saved_values is not None else _read_settings_env_values()
         )
+
+    @app.get(
+        "/settings/integrations",
+        response_model=IntegrationsSettingsResponse,
+        dependencies=[Depends(require_local_or_auth)],
+    )
+    async def get_integrations_settings():
+        """Return trading / auth / watcher integration readiness."""
+        return _build_integrations_settings_response()
+
+    @app.put(
+        "/settings/integrations",
+        response_model=IntegrationsSettingsResponse,
+        dependencies=[Depends(require_settings_write_auth)],
+    )
+    async def update_integrations_settings(payload: UpdateIntegrationsSettingsRequest):
+        """Persist Upstox access token and watcher Telegram settings."""
+        from src.trading.connectors.upstox.sdk import load_config, save_config
+        from src.watcher.config import WatcherConfig
+
+        if payload.clear_upstox_access_token or (
+            payload.upstox_access_token is not None and payload.upstox_access_token.strip()
+        ):
+            cfg = load_config()
+            if payload.clear_upstox_access_token:
+                cfg = cfg.with_overrides(access_token="")
+            else:
+                cfg = cfg.with_overrides(access_token=payload.upstox_access_token.strip())
+            save_config(cfg)
+
+        watcher = WatcherConfig.load()
+        changed = False
+        if payload.clear_telegram_bot_token:
+            watcher.telegram_bot_token = ""
+            changed = True
+        elif payload.telegram_bot_token is not None and payload.telegram_bot_token.strip():
+            watcher.telegram_bot_token = payload.telegram_bot_token.strip()
+            changed = True
+        if payload.telegram_chat_id is not None:
+            watcher.telegram_chat_id = payload.telegram_chat_id.strip()
+            changed = True
+        if payload.telegram_enabled is not None:
+            watcher.telegram_enabled = bool(payload.telegram_enabled)
+            changed = True
+        if changed:
+            watcher.save()
+
+        return _build_integrations_settings_response()

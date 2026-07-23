@@ -97,5 +97,35 @@
   100% { transform: translateX(-100%); }
 }
 
+/* Home dashboard atmosphere + staggered entrance */
+@keyframes dash-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dash-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(2%, -1.5%, 0) scale(1.04); }
+}
+
+.dash-rise {
+  animation: dash-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dash-atmosphere {
+  background:
+    radial-gradient(900px 420px at 12% -10%, hsla(27, 90%, 52%, 0.18), transparent 60%),
+    radial-gradient(700px 380px at 88% 8%, hsla(200, 70%, 45%, 0.12), transparent 55%),
+    radial-gradient(600px 400px at 50% 100%, hsla(142, 45%, 40%, 0.08), transparent 50%);
+  animation: dash-drift 18s ease-in-out infinite;
+}
+
+.dark .dash-atmosphere {
+  background:
+    radial-gradient(900px 420px at 12% -10%, hsla(27, 90%, 52%, 0.22), transparent 60%),
+    radial-gradient(700px 380px at 88% 8%, hsla(200, 80%, 50%, 0.14), transparent 55%),
+    radial-gradient(600px 400px at 50% 100%, hsla(142, 50%, 40%, 0.1), transparent 50%);
+}
+
 /* RTL: mirror directional icons (chevrons, arrows) automatically */
 [dir="rtl"] .rtl\:flip-x { transform: scaleX(-1); }

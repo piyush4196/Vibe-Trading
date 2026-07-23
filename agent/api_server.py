@@ -276,6 +276,10 @@ from src.api.live_routes import (  # noqa: F401, E402
 from src.api.alpha_routes import register_alpha_routes  # noqa: E402
 register_alpha_routes(app)
 
+# --- Home dashboard (P&L / logs / orders capability) ---
+from src.api.dashboard_routes import register_dashboard_routes  # noqa: E402
+register_dashboard_routes(app)
+
 # --- Auth helpers (login / me / SSE tickets) ---
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)
