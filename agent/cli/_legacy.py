@@ -4783,6 +4783,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from src.watcher.cli_handlers import add_subparser as _add_watch_subparser
     _add_watch_subparser(subparsers)
 
+    # Local API users
+    from src.auth.cli_handlers import add_subparser as _add_user_subparser
+    _add_user_subparser(subparsers)
+
     return parser
 
 
@@ -5661,6 +5665,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "watch":
         from src.watcher.cli_handlers import dispatch as _watch_dispatch
         return _coerce_exit_code(_watch_dispatch(args))
+    if args.command == "user":
+        from src.auth.cli_handlers import dispatch as _user_dispatch
+        return _coerce_exit_code(_user_dispatch(args))
     if args.command == "connector":
         return _coerce_exit_code(_dispatch_connector(args))
     if args.command == "memory":
