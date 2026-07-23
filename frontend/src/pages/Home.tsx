@@ -24,6 +24,19 @@ import {
 import { echarts } from "@/lib/echarts";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+
+function formatMoney(value: number, currency = "INR"): string {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `${currency} ${value.toFixed(2)}`;
+  }
+}
 
 function formatPct(value: number): string {
   const sign = value > 0 ? "+" : "";
@@ -202,6 +215,8 @@ export function Home() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [depositAmount, setDepositAmount] = useState("100000");
+  const [depositing, setDepositing] = useState(false);
 
   const load = useCallback(async (mode: "initial" | "refresh" = "refresh") => {
     if (mode === "initial") setLoading(true);
@@ -223,6 +238,24 @@ export function Home() {
     const timer = window.setInterval(() => void load("refresh"), 30_000);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  const onDeposit = async () => {
+    const amount = Number(depositAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter a positive deposit amount");
+      return;
+    }
+    setDepositing(true);
+    try {
+      await api.depositPaper({ amount, note: "Dashboard deposit", currency: data?.paper_wallet?.currency || "INR" });
+      toast.success(`Added ${amount} to paper wallet`);
+      await load("refresh");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Deposit failed");
+    } finally {
+      setDepositing(false);
+    }
+  };
 
   return (
     <div className="relative min-h-screen overflow-hidden">
@@ -278,6 +311,57 @@ export function Home() {
           </div>
         ) : data ? (
           <>
+            <section className="dash-rise rounded-2xl border bg-card/80 p-5" style={{ animationDelay: "20ms" }}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <div className="mb-1 flex items-center gap-2">
+                    <Wallet className="h-4 w-4 text-primary" />
+                    <h2 className="text-sm font-semibold tracking-wide">{t("home.paperWallet")}</h2>
+                  </div>
+                  <p className="max-w-2xl text-xs text-muted-foreground">{t("home.paperWalletHint")}</p>
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="grid gap-1 text-xs text-muted-foreground">
+                    {t("home.addMoney")}
+                    <input
+                      type="number"
+                      min={1}
+                      step={1000}
+                      value={depositAmount}
+                      onChange={(e) => setDepositAmount(e.target.value)}
+                      className="w-36 rounded-lg border bg-background px-3 py-2 text-sm text-foreground"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void onDeposit()}
+                    disabled={depositing}
+                    className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+                  >
+                    {depositing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
+                    {t("home.deposit")}
+                  </button>
+                  <Link to="/settings" className="rounded-xl border px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+                    {t("home.settings")}
+                  </Link>
+                </div>
+              </div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {[
+                  { label: t("home.cash"), value: formatMoney(data.paper_wallet?.cash ?? 0, data.paper_wallet?.currency), tone: "" },
+                  { label: t("home.equity"), value: formatMoney(data.paper_wallet?.equity ?? 0, data.paper_wallet?.currency), tone: "" },
+                  { label: t("home.totalPnl"), value: formatMoney(data.paper_wallet?.total_pnl ?? 0, data.paper_wallet?.currency), tone: pnlTone(data.paper_wallet?.total_pnl ?? 0) },
+                  { label: t("home.pnlPct"), value: formatPct(data.paper_wallet?.total_pnl_pct ?? 0), tone: pnlTone(data.paper_wallet?.total_pnl_pct ?? 0) },
+                  { label: t("home.paperPositions"), value: String(data.paper_wallet?.open_positions ?? 0), tone: "" },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-xl border bg-muted/20 px-3 py-3">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{item.label}</div>
+                    <div className={cn("mt-1 text-lg font-semibold tabular-nums", item.tone)}>{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <PeriodCard period={data.today} delay={40} />
               <PeriodCard period={data.week} delay={90} />

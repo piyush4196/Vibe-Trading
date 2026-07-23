@@ -78,6 +78,18 @@ class OrdersCapability(BaseModel):
     note: str = ""
 
 
+class PaperWalletSummary(BaseModel):
+    currency: str = "INR"
+    cash: float = 0.0
+    equity: float = 0.0
+    total_deposited: float = 0.0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    total_pnl: float = 0.0
+    total_pnl_pct: float = 0.0
+    open_positions: int = 0
+
+
 class DashboardSummary(BaseModel):
     generated_at: str
     today: PeriodPnl
@@ -91,6 +103,7 @@ class DashboardSummary(BaseModel):
     recent_runs: list[RecentRun] = Field(default_factory=list)
     open_positions: int = 0
     orders: OrdersCapability
+    paper_wallet: PaperWalletSummary = Field(default_factory=PaperWalletSummary)
     sources: dict[str, str] = Field(default_factory=dict)
 
 
@@ -346,6 +359,26 @@ def _recent_runs(limit: int = 8) -> list[RecentRun]:
     return results
 
 
+def _paper_wallet_summary() -> PaperWalletSummary:
+    try:
+        from src.trading.paper_wallet import snapshot
+
+        snap = snapshot()
+        return PaperWalletSummary(
+            currency=str(snap.get("currency") or "INR"),
+            cash=float(snap.get("cash") or 0),
+            equity=float(snap.get("equity") or 0),
+            total_deposited=float(snap.get("total_deposited") or 0),
+            realized_pnl=float(snap.get("realized_pnl") or 0),
+            unrealized_pnl=float(snap.get("unrealized_pnl") or 0),
+            total_pnl=float(snap.get("total_pnl") or 0),
+            total_pnl_pct=float(snap.get("total_pnl_pct") or 0),
+            open_positions=int(snap.get("open_positions") or 0),
+        )
+    except Exception:
+        return PaperWalletSummary()
+
+
 def _orders_capability() -> OrdersCapability:
     upstox_path = get_runtime_root() / "upstox.json"
     upstox_configured = False
@@ -362,9 +395,9 @@ def _orders_capability() -> OrdersCapability:
         upstox_configured=upstox_configured,
         upstox_live_orders=False,
         note=(
-            "Orders via agent/CLI trading_place_order. "
-            "Upstox paper orders are locally simulated; live Upstox placement is read-only. "
-            "Alpaca/OKX/Binance/etc. support mandate-gated live orders. "
+            "Deposit paper cash via Settings or POST /paper/deposit, then place "
+            "Upstox paper orders (agent trading_place_order). Fills debit the "
+            "local wallet so you can see profit/loss before going live. "
             "Live actions append to ~/.vibe-trading/live/audit.jsonl."
         ),
     )
@@ -404,10 +437,12 @@ def build_dashboard_summary() -> DashboardSummary:
         recent_runs=_recent_runs(8),
         open_positions=_count_open_positions(),
         orders=_orders_capability(),
+        paper_wallet=_paper_wallet_summary(),
         sources={
             "watcher_db": str(get_runtime_root() / "watcher" / "watcher.db"),
             "audit_log": str(get_runtime_root() / "live" / "audit.jsonl"),
             "upstox_config": str(get_runtime_root() / "upstox.json"),
+            "paper_wallet": str(get_runtime_root() / "paper_wallet.json"),
         },
     )
 

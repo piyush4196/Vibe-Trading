@@ -245,6 +245,12 @@ export const api = {
   getLiveStatus: (signal?: AbortSignal) => request<LiveStatus>("/live/status", { signal }),
   getDashboardSummary: (signal?: AbortSignal) =>
     request<DashboardSummary>("/dashboard/summary", { signal }),
+  getPaperWallet: () => request<PaperWallet>("/paper/wallet"),
+  depositPaper: (body: { amount: number; note?: string; currency?: string }) =>
+    request<PaperWallet>("/paper/deposit", { method: "POST", body: JSON.stringify(body) }),
+  withdrawPaper: (body: { amount: number; note?: string }) =>
+    request<PaperWallet>("/paper/withdraw", { method: "POST", body: JSON.stringify(body) }),
+  resetPaperWallet: () => request<PaperWallet>("/paper/reset", { method: "POST", body: "{}" }),
   getIntegrationsSettings: () => request<IntegrationsSettings>("/settings/integrations"),
   updateIntegrationsSettings: (settings: UpdateIntegrationsSettingsRequest) =>
     request<IntegrationsSettings>("/settings/integrations", {
@@ -409,6 +415,39 @@ export interface MonthlyPnlPoint {
   trades: number;
 }
 
+export interface PaperWallet {
+  currency: string;
+  cash: number;
+  equity: number;
+  buying_power?: number;
+  starting_cash: number;
+  total_deposited: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  total_pnl: number;
+  total_pnl_pct: number;
+  open_positions: number;
+  positions: Array<{
+    symbol: string;
+    quantity: number;
+    avg_price: number;
+    last_price: number;
+    market_value: number;
+    cost_basis: number;
+    unrealized_pnl: number;
+  }>;
+  ledger: Array<{
+    entry_id: string;
+    kind: string;
+    amount: number;
+    balance_after: number;
+    ts: string;
+    note: string;
+  }>;
+  updated_at: string;
+  wallet_path: string;
+}
+
 export interface DashboardSummary {
   generated_at: string;
   today: PeriodPnl;
@@ -450,6 +489,17 @@ export interface DashboardSummary {
     upstox_configured: boolean;
     upstox_live_orders: boolean;
     note: string;
+  };
+  paper_wallet?: {
+    currency: string;
+    cash: number;
+    equity: number;
+    total_deposited: number;
+    realized_pnl: number;
+    unrealized_pnl: number;
+    total_pnl: number;
+    total_pnl_pct: number;
+    open_positions: number;
   };
   sources: Record<string, string>;
 }

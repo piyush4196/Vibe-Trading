@@ -1,6 +1,6 @@
 import i18n from "@/i18n";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Database, KeyRound, Loader2, MessageSquareMore, Play, Plug2, RefreshCw, RotateCcw, Save, Server, SlidersHorizontal, Square } from "lucide-react";
+import { Database, KeyRound, Loader2, MessageSquareMore, Play, Plug2, RefreshCw, RotateCcw, Save, Server, SlidersHorizontal, Square, Wallet } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { QVerisSettings } from "@/components/settings/QVerisSettings"; // QVERIS-INTEGRATION
@@ -12,6 +12,7 @@ import {
   type IntegrationsSettings,
   type LLMProviderOption,
   type LLMSettings,
+  type PaperWallet,
 } from "@/lib/api";
 import { getApiAuthKey, setApiAuthKey } from "@/lib/apiAuth";
 
@@ -64,6 +65,10 @@ export function Settings() {
   const [telegramChatId, setTelegramChatId] = useState("");
   const [telegramEnabled, setTelegramEnabled] = useState(true);
   const [integrationsSaving, setIntegrationsSaving] = useState(false);
+  const [paperWallet, setPaperWallet] = useState<PaperWallet | null>(null);
+  const [paperAmount, setPaperAmount] = useState("100000");
+  const [paperNote, setPaperNote] = useState("");
+  const [paperBusy, setPaperBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dataSaving, setDataSaving] = useState(false);
@@ -79,8 +84,9 @@ export function Settings() {
       api.getDataSourceSettings(),
       api.getChannelStatus(),
       api.getIntegrationsSettings(),
+      api.getPaperWallet(),
     ])
-      .then(([llmResult, dataSourceResult, channelResult, integrationsResult]) => {
+      .then(([llmResult, dataSourceResult, channelResult, integrationsResult, paperResult]) => {
         if (!alive) return;
 
         if (llmResult.status === "fulfilled") {
@@ -119,6 +125,10 @@ export function Settings() {
         if (integrationsResult.status === "fulfilled") {
           setIntegrations(integrationsResult.value);
           setTelegramEnabled(integrationsResult.value.watcher_telegram_enabled);
+        }
+
+        if (paperResult.status === "fulfilled") {
+          setPaperWallet(paperResult.value);
         }
       })
       .finally(() => {
@@ -258,6 +268,41 @@ export function Settings() {
       toast.error(`Failed to save integrations: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setIntegrationsSaving(false);
+    }
+  };
+
+  const paperDeposit = async () => {
+    const amount = Number(paperAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter a positive amount");
+      return;
+    }
+    setPaperBusy(true);
+    try {
+      const updated = await api.depositPaper({
+        amount,
+        note: paperNote.trim() || "Settings deposit",
+        currency: paperWallet?.currency || "INR",
+      });
+      setPaperWallet(updated);
+      toast.success(`Deposited ${amount} ${updated.currency}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Deposit failed");
+    } finally {
+      setPaperBusy(false);
+    }
+  };
+
+  const paperReset = async () => {
+    if (!window.confirm("Reset paper wallet? This clears cash, positions, and P&L.")) return;
+    setPaperBusy(true);
+    try {
+      setPaperWallet(await api.resetPaperWallet());
+      toast.success("Paper wallet reset");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Reset failed");
+    } finally {
+      setPaperBusy(false);
     }
   };
 
@@ -461,6 +506,81 @@ export function Settings() {
       <QVerisSettings />
 
       {channelsSection}
+
+      <section className="rounded-lg border bg-card p-5 shadow-sm">
+        <div className="mb-5 space-y-1">
+          <div className="flex items-center gap-2">
+            <Wallet className="h-4 w-4 text-primary" />
+            <h2 className="text-base font-semibold">{"Paper trading wallet"}</h2>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {"Add virtual money, then run Upstox paper orders via the Agent. Fills debit this wallet so you can see profit or loss before using real capital."}
+          </p>
+        </div>
+
+        {paperWallet ? (
+          <>
+            <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">{"Cash"}</div>
+                <div className="text-sm font-medium tabular-nums">{paperWallet.currency} {paperWallet.cash.toFixed(2)}</div>
+              </div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">{"Equity"}</div>
+                <div className="text-sm font-medium tabular-nums">{paperWallet.currency} {paperWallet.equity.toFixed(2)}</div>
+              </div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">{"Total P&L"}</div>
+                <div className={`text-sm font-medium tabular-nums ${paperWallet.total_pnl >= 0 ? "text-success" : "text-danger"}`}>
+                  {paperWallet.currency} {paperWallet.total_pnl.toFixed(2)} ({paperWallet.total_pnl_pct.toFixed(2)}%)
+                </div>
+              </div>
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="text-xs text-muted-foreground">{"Open positions"}</div>
+                <div className="text-sm font-medium">{paperWallet.open_positions}</div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
+              <label className="grid gap-2">
+                <span className={labelClass}>{"Deposit amount"}</span>
+                <input type="number" min={1} step={1000} value={paperAmount} onChange={(e) => setPaperAmount(e.target.value)} className={fieldClass} />
+              </label>
+              <label className="grid gap-2">
+                <span className={labelClass}>{"Note"}</span>
+                <input value={paperNote} onChange={(e) => setPaperNote(e.target.value)} className={fieldClass} placeholder={"Optional"} />
+              </label>
+              <button
+                type="button"
+                onClick={() => void paperDeposit()}
+                disabled={paperBusy}
+                className="inline-flex items-center justify-center gap-2 self-end rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+              >
+                {paperBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
+                {"Add money"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void paperReset()}
+                disabled={paperBusy}
+                className="inline-flex items-center justify-center gap-2 self-end rounded-md border px-4 py-2 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-60"
+              >
+                <RotateCcw className="h-4 w-4" />
+                {"Reset"}
+              </button>
+            </div>
+            <p className={`mt-3 ${hintClass}`}>
+              {"Stored at "}
+              <span className="font-mono">{paperWallet.wallet_path}</span>
+              {". Ask the Agent to place Upstox paper orders after depositing."}
+            </p>
+          </>
+        ) : (
+          <div className="rounded-md border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
+            {"Paper wallet unavailable"}
+          </div>
+        )}
+      </section>
 
       <form onSubmit={submitIntegrations} className="rounded-lg border bg-card p-5 shadow-sm">
         <div className="mb-5 space-y-1">

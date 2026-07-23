@@ -280,6 +280,10 @@ register_alpha_routes(app)
 from src.api.dashboard_routes import register_dashboard_routes  # noqa: E402
 register_dashboard_routes(app)
 
+# --- Paper trading wallet (deposit / P&L) ---
+from src.api.paper_routes import register_paper_routes  # noqa: E402
+register_paper_routes(app)
+
 # --- Auth helpers (login / me / SSE tickets) ---
 from src.api.auth_routes import register_auth_routes  # noqa: E402
 register_auth_routes(app)

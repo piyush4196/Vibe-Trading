@@ -258,8 +258,35 @@ def check_status(config: UpstoxConfig | None = None) -> dict[str, Any]:
 
 
 def get_account_snapshot(config: UpstoxConfig | None = None) -> dict[str, Any]:
-    """Fetch profile + fund/margin for the configured account."""
+    """Fetch profile + fund/margin for the configured account.
+
+    When ``is_paper``, also attaches the local paper wallet so cash/equity/P&L
+    reflect deposited play money rather than only the live Upstox margin API.
+    """
     cfg = config or load_config()
+    if cfg.is_paper:
+        from src.trading.paper_wallet import snapshot as paper_snapshot
+
+        paper = paper_snapshot()
+        return {
+            "status": "ok",
+            "profile": cfg.profile,
+            "is_paper": True,
+            "host": UPSTOX_API_BASE,
+            "account": {
+                "currency": paper.get("currency") or "INR",
+                "cash": paper.get("cash"),
+                "equity": paper.get("equity"),
+                "buying_power": paper.get("buying_power"),
+                "realized_pnl": paper.get("realized_pnl"),
+                "unrealized_pnl": paper.get("unrealized_pnl"),
+                "total_pnl": paper.get("total_pnl"),
+                "total_deposited": paper.get("total_deposited"),
+                "source": "local_paper_wallet",
+            },
+            "paper_wallet": paper,
+        }
+
     profile = _api_get(cfg, f"{UPSTOX_API_V2}/user/profile")
     funds = _api_get(cfg, f"{UPSTOX_API_V2}/user/get-funds-and-margin")
     equity = (funds.get("data") or {}).get("equity") or {}
@@ -284,8 +311,35 @@ def get_account_snapshot(config: UpstoxConfig | None = None) -> dict[str, Any]:
 
 
 def get_positions(config: UpstoxConfig | None = None) -> dict[str, Any]:
-    """Fetch short-term positions."""
+    """Fetch short-term positions (paper wallet when in paper mode)."""
     cfg = config or load_config()
+    if cfg.is_paper:
+        from src.trading.paper_wallet import snapshot as paper_snapshot
+
+        paper = paper_snapshot()
+        rows = []
+        for item in paper.get("positions") or []:
+            rows.append(
+                {
+                    "symbol": item.get("symbol") or "",
+                    "instrument_key": item.get("instrument_key") or "",
+                    "exchange": "",
+                    "product_type": "paper",
+                    "quantity": item.get("quantity") or 0,
+                    "average_cost": item.get("avg_price") or 0,
+                    "current_price": item.get("last_price") or 0,
+                    "unrealized_pnl": item.get("unrealized_pnl") or 0,
+                    "realized_pnl": 0,
+                }
+            )
+        return {
+            "status": "ok",
+            "profile": cfg.profile,
+            "is_paper": True,
+            "positions": rows,
+            "source": "local_paper_wallet",
+        }
+
     payload = _api_get(cfg, f"{UPSTOX_API_V2}/portfolio/short-term-positions")
     rows = []
     for item in _as_list(payload.get("data")):
@@ -565,11 +619,30 @@ def place_order(
             "segment": segment,
         }
 
-    price = float(limit_price) if limit_price is not None else 0
+    price = float(limit_price) if limit_price is not None else 0.0
     key = resolved["instrument_key"]
-    return {
+
+    # Resolve a mark/fill price so the paper wallet can debit cash & track P&L.
+    fill_price = price
+    if type_token == "MARKET" or fill_price <= 0:
+        try:
+            quote = get_quote(
+                clean_symbol,
+                config=cfg,
+                instrument_key=key,
+                segment=segment,
+                exchange=exchange,
+            )
+            ltp = float((quote.get("quote") or {}).get("ltp") or 0)
+            if ltp > 0:
+                fill_price = ltp
+        except Exception:
+            fill_price = fill_price or 0.0
+
+    order_id = f"PAPER-{key}-{side_token}-{qty}"
+    result: dict[str, Any] = {
         "status": "ok",
-        "order_id": f"PAPER-{key}-{side_token}-{qty}",
+        "order_id": order_id,
         "symbol": clean_symbol,
         "instrument_key": key,
         "side": side_token.lower(),
@@ -579,10 +652,45 @@ def place_order(
         "order_type": type_token.lower(),
         "quantity": qty,
         "limit_price": price if type_token == "LIMIT" else None,
+        "fill_price": fill_price if fill_price > 0 else None,
         "order_status": "simulated_fill",
         "segment": resolved.get("segment"),
         "product": product,
     }
+
+    if fill_price > 0:
+        try:
+            from src.trading.paper_wallet import PaperWalletError, apply_fill
+
+            wallet = apply_fill(
+                symbol=clean_symbol,
+                side=side_token.lower(),
+                quantity=float(qty),
+                price=float(fill_price),
+                instrument_key=str(key),
+                order_id=order_id,
+                broker="upstox-paper",
+            )
+            result["paper_wallet"] = {
+                "cash": wallet.get("cash"),
+                "equity": wallet.get("equity"),
+                "total_pnl": wallet.get("total_pnl"),
+                "currency": wallet.get("currency"),
+            }
+            result["fill"] = wallet.get("fill")
+        except PaperWalletError as exc:
+            return {
+                "status": "error",
+                "error": str(exc),
+                "hint": "Deposit paper money first: Settings → Paper wallet, or POST /paper/deposit",
+            }
+    else:
+        result["warning"] = (
+            "Simulated fill recorded without wallet update (no fill price). "
+            "Deposit paper cash in Settings and ensure market quotes are available."
+        )
+
+    return result
 
 
 def cancel_order(
